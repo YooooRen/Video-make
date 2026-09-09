@@ -54,6 +54,8 @@ cd Video-make
 ```
 
 `setup.sh` 會裝 ffmpeg、Claude Code CLI、Python 套件，並複製一份 `project.yaml`。
+可選元件（pyannote、cartopy、Claude Code）安裝失敗只會警告，不會中斷其他步驟；
+必要元件缺了會在最後一次列出，並附上補救指令。
 
 ### 還需要兩件事
 
@@ -61,6 +63,13 @@ cd Video-make
 
 ```bash
 claude          # 跑一次，用你的 Claude 訂閱帳號登入，然後離開
+```
+
+腳本用的是官方獨立安裝方式（`curl -fsSL https://claude.ai/install.sh | bash`），
+不需要 Node.js。裝完如果 `claude` 找不到，多半是 `~/.local/bin` 不在 PATH：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"     # 建議寫進 ~/.zshrc
 ```
 
 **2. HuggingFace token（自動分鏡需要）**
@@ -228,6 +237,15 @@ python run.py --only 06
 ```yaml
 explainers:
   font_path: "/System/Library/Fonts/PingFang.ttc"
+```
+
+**`zsh: command not found: python`**
+
+macOS 只有 `python3`，沒有 `python`。虛擬環境啟動後才會有 `python` 這個名字：
+
+```bash
+source .venv/bin/activate      # 先做這一步
+python run.py --check
 ```
 
 **轉錄太慢**

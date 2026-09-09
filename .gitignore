@@ -1,3 +1,14 @@
+.env
+*.mov
+*.mp4
+*.wav
+*.MP4
+uploads/
+outputs/
+broll/
+__pycache__/
+venv/
+
 build/
 *.pyc
 __pycache__/

@@ -1,0 +1,86 @@
+# ═══════════════════════════════════════════════════════════════
+#  帆船船長訪談 —— 實際專案設定
+#  跑之前先： python run.py --check
+# ═══════════════════════════════════════════════════════════════
+
+project:
+  name: "帆船船長訪談"
+  event: "Sailing Interviews"
+  source_video: "/Users/yclin/temp/DJI_20260908161734_0052_D.MP4"
+  media_dir: "/Users/yclin/temp"
+  build_dir: "build"
+  language: "en"
+  target_language: "zh-Hant"
+
+sequence:
+  width: 0          # 0 = 沿用原始影片
+  height: 0
+  fps: ""
+  audio_rate: 48000
+
+speakers:
+  # 跑完 stage 02 後看 build/02_transcript.txt，把代號對到真名再往下跑
+  map: {}
+  # map:
+  #   SPEAKER_00: "Captain"
+  #   SPEAKER_01: "主持人"
+  host_hint: "問問題的是主持人，回答的是帆船船長"
+
+transcribe:
+  model: "large-v3"
+  device: "auto"
+  compute_type: "auto"
+  diarize: true
+  num_speakers: 2
+  hf_token_env: "HF_TOKEN"
+
+cleanup:
+  enabled: true
+  remove_fillers: true
+  remove_repetitions: true
+  remove_false_starts: true
+  remove_tangents: false
+  max_pause: 0.60
+  keep_pause: 0.22
+
+subtitles:
+  max_chars_en: 42
+  max_chars_zh: 18
+  max_lines: 2
+
+framing:
+  enabled: true
+  punch_scale: 1.32
+  transition_frames: 1      # 1 = 硬切；改 12 就是慢慢推近
+  open_wide: true
+  # AI 認不出誰坐哪邊時，直接手動指定：
+  # speaker_positions:
+  #   SPEAKER_00: left
+  #   SPEAKER_01: right
+
+broll:
+  enabled: true
+  min_duration: 2.5
+  max_duration: 6.0
+  min_gap: 12.0
+  max_count: 40
+  # media_dir 是 temp 資料夾，先設上限避免無關檔案吃掉額度。
+  # 素材確定都是帆船畫面的話再調高。
+  max_index: 60
+
+explainers:
+  enabled: true
+  max_count: 12
+  duration: 6.0
+  route_style: "dark"
+  font_path: ""             # 留空自動找 macOS 內建中文字型
+
+thumbnail:
+  enabled: true
+  title: ""
+  subtitle: ""
+
+claude:
+  backend: "cli"
+  model: ""
+  use_cache: true

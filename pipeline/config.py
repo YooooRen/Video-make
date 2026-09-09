@@ -95,6 +95,7 @@ DEFAULTS: dict[str, Any] = {
         "contact_sheet_cols": 3,
         "still_duration": 4.0,       # 照片素材的預設長度
         "index_concurrency": 3,
+        "max_index": 80,             # 最多辨識幾份素材，避免 temp 資料夾爆量燒額度
     },
     "explainers": {
         "enabled": True,

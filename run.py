@@ -3,6 +3,7 @@
 AI 訪談影片自動剪輯 pipeline —— 總控制台。
 
 用法：
+    python run.py --check              # 開跑前體檢（10 秒，強烈建議先跑）
     python run.py                      # 從頭跑到尾
     python run.py --from 04            # 從第 4 階段接著跑
     python run.py --only 05 06         # 只重跑 B-roll 與說明短片
@@ -49,6 +50,8 @@ def main() -> int:
     ap.add_argument("--only", nargs="+", default=None, help="只跑指定的階段")
     ap.add_argument("--no-cache", action="store_true", help="不用 Claude 回覆快取，全部重問")
     ap.add_argument("--list", action="store_true", help="列出所有階段")
+    ap.add_argument("--check", action="store_true",
+                    help="只做開跑前體檢，不執行任何階段")
     args = ap.parse_args()
 
     if args.list:
@@ -62,6 +65,10 @@ def main() -> int:
     except StageError as exc:
         print(f"❌ {exc}", file=sys.stderr)
         return 2
+
+    if args.check:
+        from pipeline.preflight import check
+        return check(cfg)
 
     if args.no_cache:
         cfg.data["claude"]["use_cache"] = False

@@ -56,6 +56,12 @@ def _index(cfg, claude, cand) -> list[dict]:
     for j, p in enumerate(cand["images"]):
         jobs.append({"id": f"P{j:03d}", "path": p, "kind": "image"})
 
+    cap = int(cfg.get("broll.max_index", 80))
+    if len(jobs) > cap:
+        warn("05", f"素材共 {len(jobs)} 份，超過 broll.max_index={cap}，"
+                   f"只辨識前 {cap} 份（想全部處理就調高這個值）")
+        jobs = jobs[:cap]
+
     tmpl = load_prompt("broll_describe.md")
     results: list[dict] = []
 

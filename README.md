@@ -79,18 +79,17 @@ claude          # 跑一次，用你的 Claude 訂閱帳號登入，然後離開
 
 ## 使用
 
-編輯 `project.yaml`，最少只要填一行：
-
-```yaml
-project:
-  source_video: "~/Movies/captain-interview.mov"
-  media_dir: "~/Movies/sailing-footage"     # B-roll 素材資料夾
-```
-
-然後：
+`project.yaml` 已經填好這支影片的路徑。**開跑前先做十秒體檢**：
 
 ```bash
 source .venv/bin/activate
+python run.py --check
+```
+
+它會一次告訴你所有會讓你等半小時才失敗的問題 —— 少裝的套件、找不到的檔案、
+沒設的 token、沒有的中文字型。全綠（或只剩你能接受的 ⚠️）之後：
+
+```bash
 python run.py
 ```
 
@@ -102,6 +101,7 @@ python run.py
 每個階段的產出都存成 JSON，隨時可以從中間接著跑：
 
 ```bash
+python run.py --check          # 開跑前體檢
 python run.py --list           # 看有哪些階段
 python run.py --from 04        # 從字幕開始重跑
 python run.py --only 05 06     # 只重做 B-roll 與說明短片
@@ -193,6 +193,12 @@ framing:
   transition_frames: 12    # 從硬切改成慢慢推近
 ```
 
+**素材資料夾裡有很多無關的檔案**
+
+`broll.max_index` 限制最多辨識幾份素材（預設 60），避免整個 temp 資料夾都送去
+辨識、白燒額度。素材確定都是帆船畫面時再調高。想更精準就把要用的素材另外
+複製到一個乾淨的資料夾，再把 `media_dir` 指過去。
+
 **B-roll 墊得太密／墊錯地方**
 
 `build/05_broll.json` 每一段都有 `reason` 說明為什麼選它。要調整：
@@ -257,6 +263,7 @@ pipeline/
   claude_client.py      claude -p 無介面呼叫 + 快取 + API fallback
   timeline.py           分數時間、剪輯映射、SRT 輸出  ← 最核心的數學
   render.py             航線地圖動畫、名詞卡繪製
+  preflight.py          開跑前體檢
   s01…s10_*.py          十個階段
 tests/smoke_test.py     端到端測試
 ```

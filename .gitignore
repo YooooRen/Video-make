@@ -14,7 +14,6 @@ build/
 __pycache__/
 .venv/
 venv/
-project.yaml
 .DS_Store
 *.mov
 *.mp4

@@ -1,20 +1,22 @@
-.env
-*.mov
-*.mp4
-*.wav
-*.MP4
-uploads/
-outputs/
-broll/
-__pycache__/
-venv/
-
+# pipeline 產出
 build/
-*.pyc
+outputs/
+uploads/
+broll/
+
+# 影音素材不進版控
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.wav
+
+# Python
 __pycache__/
+*.pyc
 .venv/
 venv/
+
+# 其他
+.env
 .DS_Store
-*.mov
-*.mp4
-*.wav

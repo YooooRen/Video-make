@@ -85,14 +85,15 @@ def _index(cfg, claude, cand) -> list[dict]:
 
         hit = cache.get(sig)
         if hit:
-            return {**base, **{k: hit[k] for k in
-                               ("summary", "tags", "subjects", "shot_type", "motion",
-                                "time_of_day", "usable", "quality_note") if k in hit}}
+            return {**base, "_indexed": True,
+                    **{k: hit[k] for k in
+                       ("summary", "tags", "subjects", "shot_type", "motion",
+                        "time_of_day", "usable", "quality_note") if k in hit}}
 
         sheet = _contact_sheet(cfg, path, job["kind"], sheets_dir, job["id"])
         if sheet is None:
-            return {**base, "summary": path.stem, "tags": [], "usable": False,
-                    "quality_note": "無法產生預覽"}
+            return {**base, "_indexed": False, "summary": path.stem, "tags": [],
+                    "usable": False, "quality_note": "無法產生預覽"}
         prompt = (tmpl.replace("{{NAME}}", path.name)
                       .replace("{{KIND}}", "影片" if job["kind"] == "video" else "照片")
                       .replace("{{DURATION}}", f'{base["duration"]:.1f} 秒'
@@ -101,11 +102,11 @@ def _index(cfg, claude, cand) -> list[dict]:
             data = claude.ask_json(prompt, images=[str(sheet)], label="05")
         except Exception as exc:  # noqa: BLE001
             warn("05", f"{path.name} 辨識失敗（{exc}）")
-            return {**base, "summary": path.stem, "tags": [], "usable": False,
-                    "quality_note": "辨識失敗"}
+            return {**base, "_indexed": False, "summary": path.stem, "tags": [],
+                    "usable": False, "quality_note": "辨識失敗"}
         if not isinstance(data, dict):
             data = {}
-        return {**base,
+        return {**base, "_indexed": True,
                 "summary": str(data.get("summary", ""))[:120],
                 "tags": [str(t) for t in (data.get("tags") or [])][:8],
                 "subjects": [str(t) for t in (data.get("subjects") or [])][:8],
@@ -124,7 +125,12 @@ def _index(cfg, claude, cand) -> list[dict]:
             if n % 10 == 0:
                 log("05", f"  ...{n}/{len(jobs)}")
 
-    write_json(cache_path, results)
+    indexed = [r for r in results if r.get("_indexed")]
+    failed = len(results) - len(indexed)
+    if failed:
+        warn("05", f"{failed} 份素材辨識失敗，這些不會寫入快取，下次重跑會自動重試")
+    # 只快取成功的結果 —— 失敗若被快取，錯誤就會變成永久的
+    write_json(cache_path, indexed)
     return results
 
 

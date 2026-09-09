@@ -131,28 +131,33 @@ class ClaudeClient:
             listing = "\n".join(f"- {p}" for p in images)
             full = (f"請先用 Read 工具讀取以下圖片檔，再回答問題：\n{listing}\n\n{prompt}")
 
-        cmd = [self.binary, "-p", "--output-format", "json"]
-        if self.model:
-            cmd += ["--model", self.model]
-        if system:
-            cmd += ["--append-system-prompt", system]
-        if images:
-            cmd += ["--allowed-tools", "Read"]
-            dirs = sorted({str(Path(p).parent) for p in images})
-            for d in dirs:
-                cmd += ["--add-dir", d]
-        cmd += self.extra_args
+        cmd = build_cli_command(
+            self.binary, model=self.model, system=system,
+            images=images, extra_args=self.extra_args)
 
-        use_stdin = self.prompt_mode == "stdin" or (
-            self.prompt_mode == "auto" and len(full) > 60000)
-        if use_stdin:
-            proc = run(cmd, stdin=full, timeout=self.timeout, check=False)
+        # prompt 一律走 stdin。--add-dir / --allowed-tools 在 Claude Code 是可變長度
+        # 參數，把 prompt 接在指令尾端會被它們當成「又一個值」吃掉，CLI 就會回報
+        # "Input must be provided either through stdin or as a prompt argument"。
+        if self.prompt_mode == "arg":
+            # stdin 一定要明確給空字串：不給的話子行程會繼承父行程的 stdin，
+            # 在非互動環境（cron、CI、管線）裡會永久阻塞在讀取上。
+            proc = run(cmd + ["--", full], stdin="", timeout=self.timeout,
+                       check=False, cwd=self.cfg.root)
         else:
-            proc = run(cmd + [full], timeout=self.timeout, check=False)
+            proc = run(cmd, stdin=full, timeout=self.timeout, check=False,
+                       cwd=self.cfg.root)
 
         if proc.returncode != 0:
-            raise StageError(f"claude CLI 回傳 {proc.returncode}: "
-                             f"{(proc.stderr or proc.stdout or '')[-1500:]}")
+            err = (proc.stderr or proc.stdout or "")
+            if "Input must be provided" in err and self.prompt_mode == "arg":
+                # 使用者把 prompt_mode 設成 arg 但這個版本的 CLI 吃不下 → 自動改走 stdin
+                warn("claude", "以參數傳送 prompt 失敗，自動改用 stdin")
+                self.prompt_mode = "stdin"
+                proc = run(cmd, stdin=full, timeout=self.timeout, check=False,
+                           cwd=self.cfg.root)
+            if proc.returncode != 0:
+                raise StageError(f"claude CLI 回傳 {proc.returncode}: "
+                                 f"{(proc.stderr or proc.stdout or '')[-1500:]}")
         out = (proc.stdout or "").strip()
         if not out:
             raise StageError("claude CLI 沒有輸出")
@@ -199,6 +204,30 @@ class ClaudeClient:
     # -------------------------------------------------------------- 統計 ---
     def summary(self) -> str:
         return f"Claude 呼叫 {self.calls} 次，快取命中 {self.cache_hits} 次（backend={self.backend}）"
+
+
+def build_cli_command(binary: str, *, model: str = "", system: str = "",
+                      images: Sequence[str] = (),
+                      extra_args: Sequence[str] = ()) -> list[str]:
+    """
+    組出 claude CLI 的參數。
+
+    刻意不包含 prompt —— prompt 一律從 stdin 進去。Claude Code 的
+    --add-dir 與 --allowed-tools 都接受多個值，任何接在它們後面的位置參數
+    都會被吃掉，所以尾端絕對不能放 prompt。
+    """
+    cmd = [binary, "-p", "--output-format", "json"]
+    if model:
+        cmd += ["--model", model]
+    if system:
+        cmd += ["--append-system-prompt", system]
+    if images:
+        dirs = sorted({str(Path(p).parent) for p in images})
+        for d in dirs:
+            cmd += ["--add-dir", d]
+        cmd += ["--allowed-tools", "Read"]
+    cmd += list(extra_args)
+    return cmd
 
 
 def load_prompt(name: str) -> str:

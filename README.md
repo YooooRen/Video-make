@@ -202,6 +202,12 @@ framing:
   transition_frames: 12    # 從硬切改成慢慢推近
 ```
 
+**stage 05 報 `Input must be provided either through stdin or as a prompt argument`**
+
+已修掉，`git pull` 即可。成因是 Claude Code 的 `--add-dir` 接受多個值，會把接在
+後面的 prompt 當成「又一個目錄」吃掉；現在 prompt 一律走 stdin。同時，素材辨識
+失敗的結果不再寫入快取，重跑會自動重試（原本失敗會被快取成永久狀態）。
+
 **素材資料夾裡有很多無關的檔案**
 
 `broll.max_index` 限制最多辨識幾份素材（預設 60），避免整個 temp 資料夾都送去
@@ -265,6 +271,7 @@ python run.py --check
 ```bash
 python tests/smoke_test.py          # 端到端煙霧測試，不需要 Claude／GPU
 python tests/smoke_test.py --keep   # 保留產出以便檢查
+python tests/test_claude_cli.py     # claude CLI 呼叫方式的回歸測試
 ```
 
 測試會用 ffmpeg 合成假素材、餵假的 Claude 回覆，跑完 stage 03–10，
@@ -283,7 +290,9 @@ pipeline/
   render.py             航線地圖動畫、名詞卡繪製
   preflight.py          開跑前體檢
   s01…s10_*.py          十個階段
-tests/smoke_test.py     端到端測試
+tests/
+  smoke_test.py         端到端測試
+  test_claude_cli.py    CLI 呼叫方式回歸測試
 ```
 
 ### 時間軸的兩套座標

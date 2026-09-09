@@ -1,0 +1,18 @@
+# 核心
+pyyaml>=6.0
+
+# 語音轉文字（詞級時間戳）
+faster-whisper>=1.0.3
+
+# 說話者分離（可選，但雙人訪談的自動分鏡需要它）
+pyannote.audio>=3.1.1
+
+# 說明短片繪製
+matplotlib>=3.8
+Pillow>=10.2
+
+# 航線地圖的真實海岸線（可選；裝不起來會自動退回簡化底圖）
+cartopy>=0.23
+
+# 只有 claude.backend = api 時才需要
+# anthropic>=0.40

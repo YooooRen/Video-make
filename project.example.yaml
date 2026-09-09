@@ -1,0 +1,95 @@
+# ═══════════════════════════════════════════════════════════════
+#  複製成 project.yaml，改成你自己的路徑就可以跑
+#  只有 project.source_video 是一定要填的
+# ═══════════════════════════════════════════════════════════════
+
+project:
+  name: "帆船船長訪談"
+  event: "Sailing Interviews"          # FCP 匯入後的事件名稱
+  source_video: "~/Movies/interview.mov"
+  media_dir: "~/Movies/sailing-footage" # 帆船活動影片＋相片的資料夾（B-roll 來源）
+  build_dir: "build"
+  language: "en"                        # 訪談語音的語言
+  target_language: "zh-Hant"
+
+sequence:
+  width: 0        # 0 = 沿用原始影片
+  height: 0
+  fps: ""         # "" = 沿用原始影片；也可寫 "30000/1001" 或 "25"
+  audio_rate: 48000
+
+speakers:
+  # 跑完 stage 02 後看 build/02_transcript.txt，把代號對到真名再重跑 03 之後
+  map: {}
+  # map:
+  #   SPEAKER_00: "Captain Lee"
+  #   SPEAKER_01: "主持人"
+  host_hint: "問問題的是主持人，回答的是帆船船長"
+
+transcribe:
+  model: "large-v3"    # 想快一點可用 medium / small
+  device: "auto"
+  compute_type: "auto"
+  diarize: true
+  num_speakers: 2      # 已知兩個人，填了會更準
+  hf_token_env: "HF_TOKEN"
+
+cleanup:
+  enabled: true
+  remove_fillers: true
+  remove_repetitions: true
+  remove_false_starts: true
+  remove_tangents: false   # 開了會連離題段落一起砍，比較激進
+  max_pause: 0.60          # 超過 0.6 秒的靜默算「太久」
+  keep_pause: 0.22         # 砍完保留多少，維持自然呼吸感
+  cut_pad: 0.06
+  min_removal: 0.10
+  min_keep: 0.30
+
+subtitles:
+  max_chars_en: 42
+  max_chars_zh: 18
+  max_lines: 2
+  min_duration: 1.0
+  max_duration: 6.0
+
+framing:
+  enabled: true
+  min_shot: 2.5
+  max_shot: 14.0
+  punch_scale: 1.32        # 特寫放大倍率，1.25–1.5 之間都合理
+  return_to_wide_every: 3
+  transition_frames: 1     # 1 = 硬切；改成 12 就是慢慢推近
+  open_wide: true          # 開場先全景
+  open_wide_seconds: 6.0
+  # AI 判斷不準時，直接手動指定兩人在畫面的哪一邊：
+  # speaker_positions:
+  #   SPEAKER_00: left
+  #   SPEAKER_01: right
+
+broll:
+  enabled: true
+  min_duration: 2.5
+  max_duration: 6.0
+  min_gap: 12.0
+  max_count: 40
+  protect_head: 8.0
+  protect_tail: 5.0
+  index_concurrency: 3
+
+explainers:
+  enabled: true
+  max_count: 12
+  duration: 6.0
+  route_style: "dark"      # dark | light
+  font_path: ""            # 留空會自動找 macOS 內建中文字型
+
+thumbnail:
+  enabled: true
+  title: ""                # 留空 = AI 產生
+  subtitle: ""
+
+claude:
+  backend: "cli"           # cli（吃訂閱額度） | api | auto
+  model: ""                # 留空用預設；也可指定 claude-opus-5 / claude-sonnet-5
+  use_cache: true          # 重跑階段時不重複燒額度

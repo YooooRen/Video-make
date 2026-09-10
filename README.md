@@ -208,6 +208,13 @@ framing:
 後面的 prompt 當成「又一個目錄」吃掉；現在 prompt 一律走 stdin。同時，素材辨識
 失敗的結果不再寫入快取，重跑會自動重試（原本失敗會被快取成永久狀態）。
 
+**Final Cut Pro 匯入時說「DTD 驗證失敗 / No declaration for attribute role of element asset-clip」**
+
+已修掉，`git pull` 後 `python run.py --only 08` 重新產生即可。成因是 FCPXML 的
+`asset-clip` 沒有 `role` 屬性（它有 `audioRole` 和 `videoRole`），只有 `<video>`、
+`<audio>`、`<caption>` 才用 `role`。現在寫檔前會先自我檢查所有屬性名稱，
+不合 DTD 就直接中止並指出是哪個元素的哪個屬性，不會等到 FCP 才發現。
+
 **素材資料夾裡有很多無關的檔案**
 
 `broll.max_index` 限制最多辨識幾份素材（預設 60），避免整個 temp 資料夾都送去

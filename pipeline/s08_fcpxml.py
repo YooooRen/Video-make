@@ -163,14 +163,18 @@ def run_stage(cfg, claude=None) -> dict:
             "offset": rate.time(local(c, float(p["at"]))),
             "name": Path(p["path"]).stem,
             "duration": (arate or rate).time(dur),
-            "role": "B-Roll",
         }
         if info["_still"]:
+            # <video> 用 role；照片沒有聲音，直接放
             attrs["start"] = "0s"
+            attrs["role"] = "B-Roll"
             ET.SubElement(c["node"], "video", attrs)
         else:
+            # <asset-clip> 沒有 role 屬性，只有 audioRole / videoRole。
+            # 寫成 role 會讓 Final Cut Pro 匯入時 DTD 驗證失敗。
             attrs["start"] = arate.time(float(p.get("src_in", 0.0)))
             attrs["srcEnable"] = "video"     # 只用畫面，不要素材的原聲
+            attrs["videoRole"] = "B-Roll"
             ET.SubElement(c["node"], "asset-clip", attrs)
         n_broll += 1
 
@@ -287,7 +291,69 @@ def _apply_captions(cfg, clips, cues, rate: Rate, owner, local) -> int:
     return count
 
 
+# FCPXML DTD 允許的屬性（只列本程式會產生的元素）。
+# 這是踩過坑之後加的防線：asset-clip 沒有 role，只有 audioRole / videoRole，
+# 寫錯了 Final Cut Pro 會在匯入時報 "No declaration for attribute ..."。
+_ALLOWED_ATTRS: dict[str, set[str]] = {
+    "fcpxml": {"version"},
+    "resources": set(),
+    "format": {"id", "name", "frameDuration", "fieldOrder", "width", "height",
+               "paspH", "paspV", "colorSpace", "projection", "stereoscopic"},
+    "asset": {"id", "name", "uid", "start", "duration", "hasVideo", "hasAudio",
+              "format", "videoSources", "audioSources", "audioChannels",
+              "audioRate", "customLUTOverride", "colorSpaceOverride",
+              "projectionOverride", "stereoscopicOverride"},
+    "media-rep": {"kind", "sig", "src", "suggestedFilename"},
+    "library": {"location", "colorProcessing"},
+    "event": {"name", "uid"},
+    "project": {"name", "uid", "id", "modDate"},
+    "sequence": {"format", "duration", "tcStart", "tcFormat", "audioLayout",
+                 "audioRate", "renderFormat", "keywords", "note"},
+    "spine": {"name", "format", "lane", "offset"},
+    "asset-clip": {"ref", "lane", "offset", "name", "start", "duration",
+                   "enabled", "format", "tcFormat", "audioRole", "videoRole",
+                   "srcEnable", "modDate", "note", "audioStart", "audioDuration"},
+    "video": {"ref", "lane", "offset", "name", "start", "duration", "enabled",
+              "role", "srcID"},
+    "caption": {"lane", "offset", "name", "start", "duration", "enabled",
+                "role", "note"},
+    "text": {"placement", "alignment", "display-style", "roll-up-height",
+             "position"},
+    "text-style": {"ref", "font", "fontSize", "fontFace", "fontColor",
+                   "backgroundColor", "alignment", "bold", "italic", "underline",
+                   "strokeColor", "strokeWidth", "baseline", "shadowColor",
+                   "shadowOffset", "shadowBlurRadius", "kerning", "lineSpacing",
+                   "tabStops"},
+    "text-style-def": {"id", "name"},
+    "adjust-transform": {"position", "scale", "rotation", "anchor"},
+    "param": {"name", "key", "value", "enabled"},
+    "keyframeAnimation": set(),
+    "keyframe": {"time", "value", "interp", "curve"},
+}
+
+
+def _validate_attributes(root: ET.Element) -> None:
+    """在寫檔前檢查所有屬性名稱，把 DTD 錯誤擋在產出之前。"""
+    bad: list[str] = []
+    for el in root.iter():
+        allowed = _ALLOWED_ATTRS.get(el.tag)
+        if allowed is None:
+            bad.append(f"未知的元素 <{el.tag}>")
+            continue
+        for name in el.attrib:
+            if name not in allowed:
+                bad.append(f"<{el.tag}> 不該有屬性 {name!r}"
+                           f"（合法的有：{', '.join(sorted(allowed)) or '無'}）")
+    if bad:
+        uniq = sorted(set(bad))
+        raise StageError(
+            "產生的 FCPXML 有 Final Cut Pro 不接受的屬性，已中止寫檔：\n  "
+            + "\n  ".join(uniq[:10])
+            + (f"\n  …另有 {len(uniq) - 10} 項" if len(uniq) > 10 else ""))
+
+
 def _write(root: ET.Element, path: Path) -> None:
+    _validate_attributes(root)
     ET.indent(root, space="  ")
     body = ET.tostring(root, encoding="unicode")
     path.write_text(

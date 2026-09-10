@@ -276,6 +276,23 @@ def test_fcpxml(path: Path, rate: Rate) -> None:
     bro = [e for c in clips for e in c.findall("asset-clip") if e.get("lane") == "1"]
     check(all(e.get("srcEnable") == "video" for e in bro),
           f"{len(bro)} 段 B-roll 影片都只用畫面不用聲音")
+    check(all(e.get("videoRole") for e in bro),
+          "B-roll 用 videoRole 標記（asset-clip 沒有 role 屬性）")
+
+    # DTD 相容性：每個屬性都必須是該元素合法的屬性名
+    from pipeline.s08_fcpxml import _ALLOWED_ATTRS
+    offenders = []
+    for el in root.iter():
+        allowed = _ALLOWED_ATTRS.get(el.tag)
+        if allowed is None:
+            offenders.append(f"<{el.tag}> 未知元素")
+            continue
+        offenders += [f"<{el.tag}> {a}" for a in el.attrib if a not in allowed]
+    check(not offenders,
+          "所有屬性名都符合 FCPXML DTD" + (f"（違規：{sorted(set(offenders))[:4]}）"
+                                          if offenders else ""))
+    check(not any(c.get("role") for c in root.iter("asset-clip")),
+          "沒有任何 asset-clip 帶 role 屬性 —— 這正是 FCP 匯入失敗的原因")
 
 
 # ------------------------------------------------------------------ main --

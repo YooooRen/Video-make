@@ -33,8 +33,16 @@ class _Res:
         self._n += 1
         return f"r{self._n}"
 
-    def format(self, width: int, height: int, rate: Rate | None,
-               name: str = "") -> str:
+    def format(self, width: int, height: int, rate: Rate | None) -> str:
+        """
+        建立一個 format resource。
+
+        刻意**不寫 name**：FCP 會把 name 當成內建格式預設去查表，自己拼出來的
+        名字（例如 4K 29.97 的 "FFVideoFormat2160p2997"）並不存在，FCP 解析
+        不出格式，用到它的素材就會變成「沒有個別媒體，剪輯無效」。
+        name 是選填的，width / height / frameDuration 已經完整定義了格式，
+        FCP 會自動建立對應的自訂格式。
+        """
         key = (width, height, rate.num if rate else 0, rate.den if rate else 0)
         if key in self._formats:
             return self._formats[key]
@@ -43,9 +51,6 @@ class _Res:
                  "colorSpace": "1-1-1 (Rec. 709)"}
         if rate is not None:
             attrs["frameDuration"] = rate.frame_duration
-            attrs["name"] = name or f"FFVideoFormat{height}p{rate.fps:g}".replace(".", "")
-        else:
-            attrs["name"] = name or "FFVideoFormatRateUndefined"
         ET.SubElement(self.node, "format", attrs)
         self._formats[key] = fid
         return fid

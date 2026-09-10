@@ -206,6 +206,13 @@ def test_fcpxml(path: Path, rate: Rate) -> None:
     res = root.find("resources")
     check(res is not None and len(res.findall("asset")) >= 3,
           f"resources 有 {len(res.findall('asset'))} 個素材")
+
+    # format 不能帶自己拼出來的 name —— FCP 會拿 name 去查內建預設，
+    # 查不到就整個格式失效，用到它的素材會變成「沒有個別媒體，剪輯無效」
+    named = [f.get("name") for f in res.findall("format") if f.get("name")]
+    check(not named, f"format 沒有硬拼的 name 屬性" + (f"（發現：{named}）" if named else ""))
+    check(all(f.get("width") and f.get("height") for f in res.findall("format")),
+          "每個 format 都有 width/height 完整描述格式")
     for a in res.findall("asset"):
         check(a.find("media-rep") is not None and
               a.find("media-rep").get("src", "").startswith("file://"),

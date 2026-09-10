@@ -215,6 +215,20 @@ framing:
 `<audio>`、`<caption>` 才用 `role`。現在寫檔前會先自我檢查所有屬性名稱，
 不合 DTD 就直接中止並指出是哪個元素的哪個屬性，不會等到 FCP 才發現。
 
+**FCP 說「沒有個別媒體，剪輯無效」**
+
+已修掉，`git pull` 後 `python run.py --only 08` 重新產生即可。成因是原本會用
+`FFVideoFormat{高度}p{幀率}` 硬拼 `<format>` 的 `name`，FCP 會拿這個名字去查
+內建格式預設 —— 1080p30 剛好矇對，4K 29.97 拼出來的 `FFVideoFormat2160p2997`
+並不存在，FCP 解析不出格式，用到它的素材就變成「沒有媒體」。現在不寫 `name`，
+由 width / height / frameDuration 完整描述格式，FCP 會自建自訂格式。
+
+**素材路徑變動後 FCP 找不到檔案**
+
+FCPXML 只是剪輯指令，不含影像資料。匯入前不要搬動原始影片與素材；真的搬了，
+用 FCP 的「重新連結檔案」指回去即可。說明短片放在 `build/explainers/`，
+清理 `build/` 會讓它們斷連。
+
 **素材資料夾裡有很多無關的檔案**
 
 `broll.max_index` 限制最多辨識幾份素材（預設 60），避免整個 temp 資料夾都送去

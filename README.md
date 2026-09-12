@@ -111,6 +111,7 @@ python run.py
 
 ```bash
 python run.py --check          # 開跑前體檢
+python run.py --probe          # 產生最小 FCPXML，排查 FCP 匯入問題
 python run.py --list           # 看有哪些階段
 python run.py --from 04        # 從字幕開始重跑
 python run.py --only 05 06     # 只重做 B-roll 與說明短片
@@ -214,6 +215,18 @@ framing:
 `asset-clip` 沒有 `role` 屬性（它有 `audioRole` 和 `videoRole`），只有 `<video>`、
 `<audio>`、`<caption>` 才用 `role`。現在寫檔前會先自我檢查所有屬性名稱，
 不合 DTD 就直接中止並指出是哪個元素的哪個屬性，不會等到 FCP 才發現。
+
+**FCP 匯入失敗，想知道問題出在哪一層**
+
+```bash
+python run.py --probe
+```
+
+產生 `build/probe_minimal.fcpxml` —— 只有一段主畫面，沒有字幕、B-roll、
+說明短片、鏡位關鍵影格。這是能成立的最小結構，用來一刀切開兩種可能：
+
+- 探針**匯入成功** → 媒體本身沒問題，是時間軸上加的東西有問題
+- 探針**匯入失敗** → 問題在媒體檔（路徑不對、編碼 FCP 不吃、VFR 變動幀率）
 
 **FCP 說「沒有個別媒體，剪輯無效」**
 

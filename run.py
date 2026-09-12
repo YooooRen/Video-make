@@ -4,6 +4,7 @@ AI 訪談影片自動剪輯 pipeline —— 總控制台。
 
 用法：
     python run.py --check              # 開跑前體檢（10 秒，強烈建議先跑）
+    python run.py --probe              # 產生最小 FCPXML，排查 FCP 匯入問題
     python run.py                      # 從頭跑到尾
     python run.py --from 04            # 從第 4 階段接著跑
     python run.py --only 05 06         # 只重跑 B-roll 與說明短片
@@ -52,6 +53,8 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="列出所有階段")
     ap.add_argument("--check", action="store_true",
                     help="只做開跑前體檢，不執行任何階段")
+    ap.add_argument("--probe", action="store_true",
+                    help="產生最小 FCPXML（只有一段主畫面）用來排查 FCP 匯入問題")
     args = ap.parse_args()
 
     if args.list:
@@ -69,6 +72,14 @@ def main() -> int:
     if args.check:
         from pipeline.preflight import check
         return check(cfg)
+
+    if args.probe:
+        try:
+            s08_fcpxml.build_probe(cfg)
+        except StageError as exc:
+            print(f"❌ {exc}", file=sys.stderr)
+            return 1
+        return 0
 
     if args.no_cache:
         cfg.data["claude"]["use_cache"] = False

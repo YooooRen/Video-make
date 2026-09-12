@@ -215,6 +215,59 @@ def run_stage(cfg, claude=None) -> dict:
             "broll": n_broll, "explainers": n_expl, "captions": n_cap}
 
 
+# -------------------------------------------------------------- 最小探針 ---
+
+def build_probe(cfg) -> Path:
+    """
+    產生一份「能成立的最小 FCPXML」：只有一段主畫面，
+    沒有字幕、沒有 B-roll、沒有說明短片、沒有鏡位關鍵影格。
+
+    用途是排錯。Final Cut Pro 匯入失敗時，先試這一份：
+      匯入成功 → 媒體本身沒問題，是時間軸上加的東西有問題
+      匯入失敗 → 問題在媒體檔（路徑、編碼、VFR）或素材宣告本身
+    """
+    ingest = read_json(cfg.build_file("01_ingest.json"))
+    seq = ingest["sequence"]
+    rate = Rate(seq["fps_num"], seq["fps_den"])
+
+    # 取第一段保留片段；還沒跑過 stage 03 就直接取開頭 5 秒
+    cuts = read_json(cfg.build_file("03_cuts.json"), default=None)
+    if cuts and cuts.get("keeps"):
+        src_s, src_e = cuts["keeps"][0]
+    else:
+        src_s, src_e = 0.0, min(5.0, float(ingest["source"]["duration"]))
+    dur = max(rate.seconds(2), src_e - src_s)
+
+    root = ET.Element("fcpxml", {"version": "1.11"})
+    res = _Res(root)
+    fmt = res.format(int(seq["width"]), int(seq["height"]), rate)
+    aid, _ = res.asset(ingest["source"]["path"])
+
+    lib = ET.SubElement(root, "library")
+    event = ET.SubElement(lib, "event", {"name": cfg.get("project.event", "Probe")})
+    project = ET.SubElement(event, "project", {"name": "PROBE minimal"})
+    sequence = ET.SubElement(project, "sequence", {
+        "format": fmt, "duration": rate.time(dur), "tcStart": "0s",
+        "tcFormat": "NDF", "audioLayout": "stereo",
+        "audioRate": f'{int(seq["audio_rate"]) // 1000}k',
+    })
+    spine = ET.SubElement(sequence, "spine")
+    ET.SubElement(spine, "asset-clip", {
+        "ref": aid, "offset": "0s", "name": "probe",
+        "start": rate.time(src_s), "duration": rate.time(dur),
+        "format": fmt, "tcFormat": "NDF",
+    })
+
+    out = cfg.build_file("probe_minimal.fcpxml")
+    _write(root, out)
+    log("probe", f"最小探針已產生：{out}")
+    log("probe", f"內容：1 段主畫面，{fmt_hhmmss(src_s)} 起算 {dur:.1f} 秒，"
+                 f"沒有字幕／B-roll／鏡位")
+    log("probe", "匯入成功 → 媒體沒問題，問題在時間軸上加的東西")
+    log("probe", "匯入失敗 → 問題在媒體檔本身（路徑、編碼、VFR）")
+    return out
+
+
 # ------------------------------------------------------------ 鏡位處理 -----
 
 def _apply_framing(cfg, clips, shots, rate: Rate) -> int:

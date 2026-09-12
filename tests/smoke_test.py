@@ -390,6 +390,20 @@ thumbnail:
         check(srt.startswith("1\n") and "-->" in srt, "SRT 格式正確")
 
         test_fcpxml(b / "08_timeline.fcpxml", Rate(FPS_N, FPS_D))
+
+        print("\n▶ 最小探針 (--probe)")
+        s08_fcpxml.build_probe(cfg)
+        pr = b / "probe_minimal.fcpxml"
+        check(pr.exists() and pr.stat().st_size > 0, "probe_minimal.fcpxml 已產生")
+        praw = pr.read_text()
+        proot = ET.fromstring(praw[praw.index("<fcpxml"):])
+        pclips = proot.findall(".//spine/asset-clip")
+        check(len(pclips) == 1, f"探針只有 1 段主畫面（實際 {len(pclips)}）")
+        check(not list(proot.iter("caption")), "探針沒有字幕")
+        check(not list(proot.iter("adjust-transform")), "探針沒有鏡位關鍵影格")
+        check(len(list(pclips[0])) == 0, "探針的 clip 沒有任何連接素材")
+        check(len(proot.find("resources").findall("asset")) == 1,
+              "探針只引用訪談影片一個素材")
     finally:
         if "--keep" in sys.argv:
             print(f"\n▶ 產出保留在 {tmp}")

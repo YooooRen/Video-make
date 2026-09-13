@@ -264,6 +264,21 @@ def test_fcpxml(path: Path, rate: Rate) -> None:
           f"clip 的 tcFormat 標成 {'DF' if drop else 'NDF'}（跟著時間碼型態）")
     check(all(c.get("audioRole") for c in clips), "主畫面掛在 dialogue 音訊角色上")
 
+    # 每個 clip 取用的範圍都必須落在素材真實的媒體範圍內
+    from pipeline.s08_fcpxml import _validate_frame_grid, _validate_ranges
+    ranges = {a.get("id"): (secs(a.get("start")), secs(a.get("duration")), a.get("name"))
+              for a in res.findall("asset")}
+    # 靜態圖片的 duration 是 0s，代表不設時間界線
+    probs = _validate_ranges(root, ranges)
+    check(not probs, "所有 clip 都落在素材的媒體範圍內" +
+          (f"（越界：{probs[:2]}）" if probs else ""))
+
+    # 時間軸上的 offset / duration 必須是序列影格的整數倍。
+    # 說明短片刻意用 30fps 算圖、時間軸是 29.97 —— 正是踩到的情境。
+    grid = _validate_frame_grid(root, rate)
+    check(not grid, "所有 offset / duration 都對齊序列的影格網格" +
+          (f"（未對齊：{grid[:2]}）" if grid else ""))
+
     # 連接的素材：offset 必須落在所屬 clip 的內部時間範圍內
     lanes, cap_langs, in_range = set(), set(), True
     n_conn = 0
@@ -345,7 +360,7 @@ explainers:
   duration: 3.0
   width: 640
   height: 360
-  fps: 12
+  fps: 30
 thumbnail:
   candidates: 6
 """, encoding="utf-8")

@@ -240,7 +240,10 @@ def run_stage(cfg, claude=None) -> dict:
             "ref": aid, "lane": "1",
             "offset": rate.time(local(c, float(p["at"]))),
             "name": Path(p["path"]).stem,
-            "duration": (arate or rate).time(dur),
+            # duration 與 offset 都屬於「時間軸」座標系，必須對齊序列的影格網格；
+            # 只有 start 屬於素材自己的時間軸，才用素材的幀率。
+            # 用錯會讓 FCP 說「項目不在剪輯影格的界限內」。
+            "duration": rate.time(dur),
         }
         if info["_still"]:
             # <video> 用 role；照片沒有聲音，直接放
@@ -272,13 +275,20 @@ def run_stage(cfg, claude=None) -> dict:
             "offset": rate.time(local(c, float(it["at"]))),
             "name": it.get("title_zh") or it.get("term_zh") or "Explainer",
             "start": arate.time(float(info.get("_start", 0.0) or 0.0)),
-            "duration": arate.time(float(it["duration"])),
+            "duration": rate.time(float(it["duration"])),
             "role": "Graphics",
         })
         n_expl += 1
 
     # ---- 字幕（lane -1 / -2）----------------------------------------------
     n_cap = _apply_captions(cfg, clips, subs["cues"], rate, owner, local)
+
+    grid = _validate_frame_grid(root, rate)
+    if grid:
+        warn("08", f"有 {len(grid)} 個項目沒有對齊序列的影格網格，"
+                   "Final Cut Pro 會說「項目不在剪輯影格的界限內」：")
+        for line in grid[:5]:
+            warn("08", f"  {line}")
 
     problems = _validate_ranges(root, res.ranges)
     if problems:
@@ -520,6 +530,34 @@ def _validate_ranges(root: ET.Element, ranges: dict) -> list[str]:
             problems.append(
                 f'{name}：clip 取 {c_start:.3f}–{c_start + c_dur:.3f}s，'
                 f'但媒體只有 {a_start:.3f}–{a_start + a_dur:.3f}s')
+    return problems
+
+
+_TIMELINE_ATTRS = ("offset", "duration")
+
+
+def _validate_frame_grid(root: ET.Element, rate: Rate) -> list[str]:
+    """
+    時間軸上的 offset 與 duration 必須是序列 frameDuration 的整數倍。
+
+    最常見的錯法是拿素材自己的幀率去寫 duration：30fps 素材的 6.000 秒
+    在 29.97 的時間軸上等於 179.82 格，不是整數格，Final Cut Pro 會說
+    「項目不在剪輯影格的界限內」。
+    """
+    step = rate.den / rate.num
+    problems: list[str] = []
+    for el in root.iter():
+        if el.tag not in ("asset-clip", "video", "caption", "spine", "gap"):
+            continue
+        for attr in _TIMELINE_ATTRS:
+            raw = el.get(attr)
+            if not raw:
+                continue
+            frames = parse_fcp_time(raw) / step
+            if abs(frames - round(frames)) > 1e-6:
+                problems.append(
+                    f'<{el.tag}> {el.get("name") or ""} {attr}="{raw}" '
+                    f'= {frames:.3f} 格，不是整數格')
     return problems
 
 

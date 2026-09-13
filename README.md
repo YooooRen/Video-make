@@ -88,6 +88,9 @@ export PATH="$HOME/.local/bin:$PATH"     # 建議寫進 ~/.zshrc
 
 ## 使用
 
+`setup.sh` 會從 `project.example.yaml` 複製一份 `project.yaml` 給你。
+它不進版控，所以你怎麼改都不會跟 `git pull` 衝突。
+
 `project.yaml` 已經填好這支影片的路徑。**開跑前先做十秒體檢**：
 
 ```bash

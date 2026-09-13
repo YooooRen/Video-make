@@ -105,7 +105,54 @@ def media_info(path: str | Path) -> dict:
     if a:
         out["audio_rate"] = int(a.get("sample_rate") or 48000)
         out["audio_channels"] = int(a.get("channels") or 2)
+
+    # 嵌入式時間碼：決定這段媒體在它自己的時間軸上從幾秒開始
+    tc = None
+    for st in info.get("streams", []):
+        tag = (st.get("tags") or {}).get("timecode")
+        if tag:
+            tc = tag
+            break
+    tc = tc or (info.get("format", {}).get("tags") or {}).get("timecode")
+    out["timecode"] = tc or ""
+    out["start"], out["drop_frame"] = 0.0, False
+    if tc and v:
+        parsed = parse_timecode(tc, out.get("fps_num", 30), out.get("fps_den", 1))
+        if parsed:
+            out["start"], out["drop_frame"] = parsed
     return out
+
+
+_TC_RE = re.compile(r"^(\d{1,3}):(\d{1,2}):(\d{1,2})([:;.])(\d{1,3})$")
+
+
+def parse_timecode(tc: str, fps_num: int, fps_den: int) -> tuple[float, bool] | None:
+    """
+    把 "HH:MM:SS:FF"（NDF）或 "HH:MM:SS;FF"（drop frame）換算成秒。
+
+    回傳 (秒數, 是否為 drop frame)。無法解析則回傳 None。
+
+    這件事很重要：相機拍出來的檔案常帶「拍攝當下的時間碼」，例如 21:43:27。
+    Final Cut Pro 認為這段媒體存在於時間軸的 21 小時 43 分處；如果 FCPXML 把
+    素材的 start 寫成 0s，clip 就會指向一個沒有媒體的位置，匯入時會出現
+    「沒有個別媒體，剪輯無效」。
+    """
+    m = _TC_RE.match((tc or "").strip())
+    if not m:
+        return None
+    hh, mm, ss, sep, ff = (int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                           m.group(4), int(m.group(5)))
+    nominal = int(round(fps_num / fps_den)) if fps_den else 30
+    if nominal <= 0:
+        return None
+    frames = (hh * 3600 + mm * 60 + ss) * nominal + ff
+    drop = sep in ";."
+    if drop:
+        # drop frame 會跳過編號：每分鐘丟 N 格，但每逢 10 的倍數分鐘不丟
+        dropped = int(round(nominal * 2 / 30))
+        total_minutes = hh * 60 + mm
+        frames -= dropped * (total_minutes - total_minutes // 10)
+    return frames * fps_den / fps_num, drop
 
 
 def parse_rate(text: str) -> tuple[int, int]:

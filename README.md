@@ -230,11 +230,20 @@ python run.py --probe
 
 **FCP 說「沒有個別媒體，剪輯無效」**
 
-已修掉，`git pull` 後 `python run.py --only 08` 重新產生即可。成因是原本會用
-`FFVideoFormat{高度}p{幀率}` 硬拼 `<format>` 的 `name`，FCP 會拿這個名字去查
-內建格式預設 —— 1080p30 剛好矇對，4K 29.97 拼出來的 `FFVideoFormat2160p2997`
-並不存在，FCP 解析不出格式，用到它的素材就變成「沒有媒體」。現在不寫 `name`，
-由 width / height / frameDuration 完整描述格式，FCP 會自建自訂格式。
+已修掉，`git pull` 後 `python run.py --only 08` 重新產生即可。
+
+成因是**嵌入式時間碼**。相機拍出來的檔案常帶「拍攝當下的時間」，例如
+`21:43:27;18`。Final Cut Pro 認為這段媒體存在於它自己時間軸的 21 小時 43 分處
+（78207 秒），而原本的程式一律把素材的 `start` 寫成 `0s`，clip 就指向一個
+沒有媒體的位置 —— 錯誤訊息是字面意思。
+
+現在會用 ffprobe 讀出時間碼，換算成秒（含 drop-frame 的跳號規則）寫進素材的
+`start`，所有 clip 的 `start` 也跟著位移，`tcFormat` 標成 `DF` 或 `NDF`。
+訪談影片與 B-roll 素材都適用。
+
+> 排錯小技巧：把素材匯入 FCP、拖到時間軸，再「檔案 → 輸出 XML」，
+> 就得到一份 FCP 自己寫的標準答案，拿來跟 `build/08_timeline.fcpxml`
+> 逐屬性比對，比猜快得多。
 
 **素材路徑變動後 FCP 找不到檔案**
 

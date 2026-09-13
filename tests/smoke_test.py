@@ -30,6 +30,7 @@ from pipeline.util import write_json                                        # no
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FPS_N, FPS_D = 30000, 1001
+TIMECODE = "21:43:27;18"        # drop frame，與使用者實際遇到的檔案一致
 DUR = 60.0
 
 _failures: list[str] = []
@@ -120,10 +121,13 @@ class FakeClaude:
 
 def make_media(d: Path) -> tuple[Path, Path]:
     src = d / "interview.mov"
+    # 刻意寫入 drop-frame 時間碼，重現相機檔會帶「拍攝當下時間」的情況 ——
+    # 這正是讓 Final Cut Pro 說「沒有個別媒體，剪輯無效」的原因
     subprocess.run(
         ["ffmpeg", "-y", "-v", "error",
          "-f", "lavfi", "-i", f"testsrc2=size=1280x720:rate={FPS_N}/{FPS_D}:duration={DUR}",
          "-f", "lavfi", "-i", f"sine=frequency=440:duration={DUR}",
+         "-timecode", TIMECODE,
          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src)],
         check=True)
 
@@ -244,6 +248,21 @@ def test_fcpxml(path: Path, rate: Rate) -> None:
     seq = root.find(".//sequence")
     check(abs(secs(seq.get("duration")) - cursor) < 0.05,
           f"sequence 長度 {secs(seq.get('duration')):.2f}s 與所有片段總和一致")
+
+    # 時間碼：素材的 start 必須是媒體真正的起點，clip 的 start 也要落在那之後
+    from pipeline.util import parse_timecode
+    want, drop = parse_timecode(TIMECODE, FPS_N, FPS_D)
+    main = res.findall("asset")[0]
+    a_start, a_dur = secs(main.get("start")), secs(main.get("duration"))
+    check(abs(a_start - want) < 0.01,
+          f"素材 start = 時間碼 {TIMECODE} 的 {want:.2f}s（實際 {a_start:.2f}s）")
+    check(a_start > 0, "素材 start 不是 0s —— 這正是 FCP 匯入失敗的原因")
+    in_media = all(a_start - 1e-6 <= secs(c.get("start")) <= a_start + a_dur + 1e-6
+                   for c in clips)
+    check(in_media, "每個 clip 的 start 都落在素材真實的媒體範圍內")
+    check(all(c.get("tcFormat") == ("DF" if drop else "NDF") for c in clips),
+          f"clip 的 tcFormat 標成 {'DF' if drop else 'NDF'}（跟著時間碼型態）")
+    check(all(c.get("audioRole") for c in clips), "主畫面掛在 dialogue 音訊角色上")
 
     # 連接的素材：offset 必須落在所屬 clip 的內部時間範圍內
     lanes, cap_langs, in_range = set(), set(), True
@@ -404,6 +423,9 @@ thumbnail:
         check(len(list(pclips[0])) == 0, "探針的 clip 沒有任何連接素材")
         check(len(proot.find("resources").findall("asset")) == 1,
               "探針只引用訪談影片一個素材")
+        pa = proot.find("resources").find("asset")
+        check(pa.get("start") != "0s" and pclips[0].get("start") != "0s",
+              "探針也套用了時間碼起點")
     finally:
         if "--keep" in sys.argv:
             print(f"\n▶ 產出保留在 {tmp}")

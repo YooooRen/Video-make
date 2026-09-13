@@ -74,7 +74,13 @@ class _Res:
             raise StageError(f"{Path(key).name} 沒有影像軌，無法放進時間軸")
 
         aid = self._id()
-        attrs = {"id": aid, "name": Path(key).stem, "start": "0s", "duration": dur,
+        # start 必須是媒體「在它自己的時間軸上」的起點。相機檔常帶拍攝當下的
+        # 時間碼（例如 21:43:27），寫成 0s 會讓 clip 指向沒有媒體的位置，
+        # Final Cut Pro 匯入時就會說「沒有個別媒體，剪輯無效」。
+        media_start = float(info.get("start", 0.0) or 0.0)
+        attrs = {"id": aid, "name": Path(key).stem,
+                 "start": (arate or Rate(30, 1)).time(media_start),
+                 "duration": dur,
                  "hasVideo": "1", "videoSources": "1", "format": fid}
         if info.get("has_audio"):
             attrs.update({"hasAudio": "1", "audioSources": "1",
@@ -85,6 +91,7 @@ class _Res:
                                           "src": Path(key).as_uri()})
         info["_rate"] = arate
         info["_still"] = arate is None
+        info["_start"] = media_start
         self._assets[key] = (aid, info)
         return aid, info
 
@@ -121,21 +128,30 @@ def run_stage(cfg, claude=None) -> dict:
     spine = ET.SubElement(sequence, "spine")
 
     # ---- 主軸：每個保留片段一刀 -------------------------------------------
+    media_start = float(main_info.get("_start", 0.0) or 0.0)
+    tc_format = "DF" if main_info.get("drop_frame") else "NDF"
+    if media_start:
+        log("08", f"訪談影片帶有時間碼 {main_info.get('timecode')}"
+                  f"（{tc_format}），素材起點 = {media_start:.3f}s")
+
     clips: list[dict] = []
     edit_cursor = 0.0
     for i, (src_s, src_e) in enumerate(cuts["keeps"]):
         dur = src_e - src_s
+        # clip 的 start 與媒體同一個座標系，所以要加上時間碼起點
+        clip_start = media_start + src_s
         node = ET.SubElement(spine, "asset-clip", {
             "ref": main_id,
             "offset": rate.time(edit_cursor),
             "name": f'{cfg.get("project.name", "Interview")} {i+1:03d}',
-            "start": rate.time(src_s),
+            "start": rate.time(clip_start),
             "duration": rate.time(dur),
             "format": seq_format,
-            "tcFormat": "NDF",
+            "tcFormat": tc_format,
+            "audioRole": "dialogue",
         })
         clips.append({"node": node, "edit_s": edit_cursor, "edit_e": edit_cursor + dur,
-                      "src_s": src_s})
+                      "src_s": clip_start})
         edit_cursor += dur
 
     def owner(t: float) -> dict:
@@ -171,13 +187,14 @@ def run_stage(cfg, claude=None) -> dict:
         }
         if info["_still"]:
             # <video> 用 role；照片沒有聲音，直接放
-            attrs["start"] = "0s"
+            attrs["start"] = "0s"    # 靜態照片沒有時間軸
             attrs["role"] = "B-Roll"
             ET.SubElement(c["node"], "video", attrs)
         else:
             # <asset-clip> 沒有 role 屬性，只有 audioRole / videoRole。
             # 寫成 role 會讓 Final Cut Pro 匯入時 DTD 驗證失敗。
-            attrs["start"] = arate.time(float(p.get("src_in", 0.0)))
+            attrs["start"] = arate.time(
+                float(info.get("_start", 0.0) or 0.0) + float(p.get("src_in", 0.0)))
             attrs["srcEnable"] = "video"     # 只用畫面，不要素材的原聲
             attrs["videoRole"] = "B-Roll"
             ET.SubElement(c["node"], "asset-clip", attrs)
@@ -197,7 +214,7 @@ def run_stage(cfg, claude=None) -> dict:
             "ref": aid, "lane": "2",
             "offset": rate.time(local(c, float(it["at"]))),
             "name": it.get("title_zh") or it.get("term_zh") or "Explainer",
-            "start": "0s",
+            "start": arate.time(float(info.get("_start", 0.0) or 0.0)),
             "duration": arate.time(float(it["duration"])),
             "role": "Graphics",
         })
@@ -241,7 +258,9 @@ def build_probe(cfg) -> Path:
     root = ET.Element("fcpxml", {"version": "1.11"})
     res = _Res(root)
     fmt = res.format(int(seq["width"]), int(seq["height"]), rate)
-    aid, _ = res.asset(ingest["source"]["path"])
+    aid, info = res.asset(ingest["source"]["path"])
+    media_start = float(info.get("_start", 0.0) or 0.0)
+    tc_format = "DF" if info.get("drop_frame") else "NDF"
 
     lib = ET.SubElement(root, "library")
     event = ET.SubElement(lib, "event", {"name": cfg.get("project.event", "Probe")})
@@ -254,8 +273,8 @@ def build_probe(cfg) -> Path:
     spine = ET.SubElement(sequence, "spine")
     ET.SubElement(spine, "asset-clip", {
         "ref": aid, "offset": "0s", "name": "probe",
-        "start": rate.time(src_s), "duration": rate.time(dur),
-        "format": fmt, "tcFormat": "NDF",
+        "start": rate.time(media_start + src_s), "duration": rate.time(dur),
+        "format": fmt, "tcFormat": tc_format,
     })
 
     out = cfg.build_file("probe_minimal.fcpxml")
@@ -263,6 +282,9 @@ def build_probe(cfg) -> Path:
     log("probe", f"最小探針已產生：{out}")
     log("probe", f"內容：1 段主畫面，{fmt_hhmmss(src_s)} 起算 {dur:.1f} 秒，"
                  f"沒有字幕／B-roll／鏡位")
+    if media_start:
+        log("probe", f"素材時間碼 {info.get('timecode')}（{tc_format}）"
+                     f"→ start {media_start:.3f}s")
     log("probe", "匯入成功 → 媒體沒問題，問題在時間軸上加的東西")
     log("probe", "匯入失敗 → 問題在媒體檔本身（路徑、編碼、VFR）")
     return out

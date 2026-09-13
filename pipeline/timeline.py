@@ -67,6 +67,15 @@ class Rate:
         return f"{frames * self.den}/{self.num}s"
 
 
+def parse_fcp_time(text: str) -> float:
+    """把 FCPXML 的時間字串（'1001/30000s' 或 '5s'）還原成秒數。"""
+    t = (text or "0s").strip().rstrip("s")
+    if "/" in t:
+        n, d = t.split("/", 1)
+        return int(n) / int(d)
+    return float(t or 0)
+
+
 # --------------------------------------------------------------- EditMap ----
 
 class EditMap:

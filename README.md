@@ -245,6 +245,24 @@ python run.py --probe
 > 就得到一份 FCP 自己寫的標準答案，拿來跟 `build/08_timeline.fcpxml`
 > 逐屬性比對，比猜快得多。
 
+**FCP 還是說「沒有個別媒體」，但時間碼已經修過了**
+
+先跑 `python run.py --check`，看「嵌入時間碼」那一行：
+
+- 顯示時間碼與素材起點 → 偵測正常，問題在別處
+- 顯示「ffprobe 讀不到」→ 手動指定。把素材匯入 FCP，看瀏覽器裡的起始
+  時間碼，填進 `project.yaml`：
+
+```yaml
+project:
+  source_timecode: "21:43:27;18"     # 分號代表 drop frame
+media_timecodes:
+  DJI_xxxx.MP4: "18:02:11;04"        # B-roll 素材各自指定
+```
+
+另外 stage 08 現在會在寫檔前檢查每個 clip 取用的範圍是否落在素材的媒體範圍內，
+越界會直接警告並指出是哪個檔案 —— 不必等 FCP 才發現。
+
 **素材路徑變動後 FCP 找不到檔案**
 
 FCPXML 只是剪輯指令，不含影像資料。匯入前不要搬動原始影片與素材；真的搬了，

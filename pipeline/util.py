@@ -14,6 +14,9 @@ from typing import Any, Iterable, Sequence
 
 VIDEO_EXT = {".mov", ".mp4", ".m4v", ".avi", ".mts", ".mxf", ".mkv", ".insv"}
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".heic", ".tif", ".tiff", ".webp", ".dng"}
+# ffprobe 會把單張圖片回報成「0.04 秒的影片」，光看 duration 判斷不出來
+IMAGE_CODECS = {"mjpeg", "png", "bmp", "tiff", "gif", "webp", "jpeg2000",
+                "hevc_image", "heif", "apng", "ppm", "targa", "dng"}
 
 _T0 = time.time()
 
@@ -102,6 +105,16 @@ def media_info(path: str | Path) -> dict:
         out["rotation"] = rot
         if abs(rot) % 180 == 90:
             out["width"], out["height"] = out["height"], out["width"]
+    # 是不是單張靜態圖片：副檔名、編碼、影格數三者任一成立就算
+    codec = (v or {}).get("codec_name", "")
+    nb = (v or {}).get("nb_frames")
+    out["is_still"] = bool(
+        Path(path).suffix.lower() in IMAGE_EXT
+        or codec in IMAGE_CODECS
+        or (nb is not None and str(nb) == "1")
+        or not out.get("has_video")
+        or dur <= 0)
+
     if a:
         out["audio_rate"] = int(a.get("sample_rate") or 48000)
         out["audio_channels"] = int(a.get("channels") or 2)

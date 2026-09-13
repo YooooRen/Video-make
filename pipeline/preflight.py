@@ -126,6 +126,20 @@ def _source(cfg, r: _Report) -> None:
     r.add(OK, "訪談影片",
           f'{p.name}｜{mins:.1f} 分鐘｜{info.get("width")}x{info.get("height")}'
           f'｜{info.get("fps_num",30)/info.get("fps_den",1):.2f}fps')
+
+    # 嵌入時間碼：讀不到的話 Final Cut Pro 會說「沒有個別媒體，剪輯無效」
+    override = cfg.get("project.source_timecode", "")
+    if override:
+        r.add(OK, "  嵌入時間碼", f"手動指定 {override}")
+    elif info.get("timecode"):
+        r.add(OK, "  嵌入時間碼",
+              f'{info["timecode"]}'
+              f'（{"DF" if info.get("drop_frame") else "NDF"}）'
+              f' → 素材起點 {info.get("start", 0.0):.3f}s')
+    else:
+        r.add(WARN, "  嵌入時間碼",
+              "ffprobe 讀不到 → 素材起點以 0s 處理。"
+              "若 FCP 說「沒有個別媒體」，請用 project.source_timecode 指定")
     if mins > 120:
         r.add(WARN, "  片長", f"{mins:.0f} 分鐘偏長，轉錄可能要一小時以上")
 

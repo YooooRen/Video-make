@@ -11,6 +11,9 @@ project:
   build_dir: "build"
   language: "en"                        # 訪談語音的語言
   target_language: "zh-Hant"
+  source_timecode: ""                   # ffprobe 讀不到嵌入時間碼時手動指定
+
+media_timecodes: {}                     # {檔名: "HH:MM:SS;FF"}
 
 sequence:
   width: 0        # 0 = 沿用原始影片

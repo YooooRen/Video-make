@@ -11,6 +11,12 @@ project:
   build_dir: "build"
   language: "en"
   target_language: "zh-Hant"
+  # ffprobe 讀不到嵌入時間碼時在這裡指定（用 python run.py --check 確認）。
+  # 查法：把素材匯入 FCP，看瀏覽器裡顯示的起始時間碼。
+  source_timecode: ""
+
+# 個別 B-roll 素材的時間碼覆寫，格式 {檔名: "HH:MM:SS;FF"}
+media_timecodes: {}
 
 sequence:
   width: 0          # 0 = 沿用原始影片

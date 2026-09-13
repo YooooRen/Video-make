@@ -22,6 +22,7 @@ DEFAULTS: dict[str, Any] = {
         "build_dir": "build",
         "language": "en",            # 原始語音語言
         "target_language": "zh-Hant",
+        "source_timecode": "",       # ffprobe 讀不到嵌入時間碼時手動指定，例如 "21:43:27;18"
     },
     "sequence": {
         # 留空 = 沿用原始影片的解析度／幀率
@@ -122,6 +123,8 @@ DEFAULTS: dict[str, Any] = {
         "title": "",                 # 留空 = 由 AI 產生
         "subtitle": "",
     },
+    # 個別素材的時間碼覆寫：{檔名: "HH:MM:SS;FF"}
+    "media_timecodes": {},
     "claude": {
         "backend": "cli",            # cli | api | auto
         "cli_binary": "claude",

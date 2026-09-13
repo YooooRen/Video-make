@@ -14,8 +14,9 @@ import html
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from .timeline import Rate
-from .util import StageError, fmt_hhmmss, log, media_info, read_json, warn
+from .timeline import Rate, parse_fcp_time
+from .util import (StageError, fmt_hhmmss, log, media_info, parse_timecode,
+                   read_json, warn)
 
 CAPTION_FONT = "Helvetica Neue"
 
@@ -23,11 +24,13 @@ CAPTION_FONT = "Helvetica Neue"
 class _Res:
     """resources 區塊的管理器：格式與素材各自去重。"""
 
-    def __init__(self, root: ET.Element):
+    def __init__(self, root: ET.Element, timecodes: dict[str, str] | None = None):
         self.node = ET.SubElement(root, "resources")
+        self.timecodes = timecodes or {}     # 檔名 -> 手動指定的時間碼
         self._n = 0
         self._formats: dict[tuple, str] = {}
         self._assets: dict[str, tuple[str, dict]] = {}
+        self.ranges: dict[str, tuple[float, float, str]] = {}   # id -> (start, 長度, 名稱)
 
     def _id(self) -> str:
         self._n += 1
@@ -55,13 +58,28 @@ class _Res:
         self._formats[key] = fid
         return fid
 
+    def _apply_timecode_override(self, path: str, info: dict) -> None:
+        """project.yaml 指定的時間碼優先於 ffprobe 偵測到的值。"""
+        name = Path(path).name
+        tc = self.timecodes.get(name) or self.timecodes.get(Path(path).stem)
+        if not tc:
+            return
+        parsed = parse_timecode(tc, info.get("fps_num", 30), info.get("fps_den", 1))
+        if parsed is None:
+            warn("08", f"{name} 的時間碼覆寫值 {tc!r} 格式不對，忽略")
+            return
+        info["start"], info["drop_frame"] = parsed
+        info["timecode"] = tc
+        log("08", f"{name} 使用手動指定的時間碼 {tc} → {parsed[0]:.3f}s")
+
     def asset(self, path: str) -> tuple[str, dict]:
         """回傳 (asset_id, media_info)，同一個檔案只會建立一次。"""
         key = str(Path(path).resolve())
         if key in self._assets:
             return self._assets[key]
         info = media_info(key)
-        is_still = not info.get("fps_num") or info["duration"] <= 0
+        self._apply_timecode_override(key, info)
+        is_still = bool(info.get("is_still"))
         if info.get("has_video") and not is_still:
             arate = Rate(info["fps_num"], info["fps_den"])
             fid = self.format(info.get("width", 1920), info.get("height", 1080), arate)
@@ -92,8 +110,37 @@ class _Res:
         info["_rate"] = arate
         info["_still"] = arate is None
         info["_start"] = media_start
+        # 靜態圖片沒有時間長度限制，長度記 0 表示「不設界線」
+        self.ranges[aid] = (media_start,
+                            0.0 if is_still else float(info.get("duration", 0.0)),
+                            Path(key).name)
         self._assets[key] = (aid, info)
         return aid, info
+
+
+def _timecode_overrides(cfg) -> dict[str, str]:
+    """
+    收集手動指定的時間碼。
+
+    ffprobe 讀不到某些相機的嵌入時間碼時，可以在 project.yaml 直接寫死：
+
+        project:
+          source_timecode: "21:43:27;18"
+        media_timecodes:
+          DJI_20260906175124_0010_D.MP4: "18:02:11;04"
+
+    查法：把素材匯入 Final Cut Pro，看瀏覽器裡顯示的起始時間碼。
+    """
+    out: dict[str, str] = {}
+    src_tc = cfg.get("project.source_timecode", "")
+    if src_tc:
+        try:
+            out[cfg.source_video.name] = str(src_tc)
+        except StageError:
+            pass
+    for name, tc in (cfg.get("media_timecodes", {}) or {}).items():
+        out[str(name)] = str(tc)
+    return out
 
 
 def run_stage(cfg, claude=None) -> dict:
@@ -109,7 +156,7 @@ def run_stage(cfg, claude=None) -> dict:
     W, H = int(seq["width"]), int(seq["height"])
 
     root = ET.Element("fcpxml", {"version": "1.11"})
-    res = _Res(root)
+    res = _Res(root, _timecode_overrides(cfg))
     seq_format = res.format(W, H, rate)
     main_id, main_info = res.asset(ingest["source"]["path"])
 
@@ -131,8 +178,13 @@ def run_stage(cfg, claude=None) -> dict:
     media_start = float(main_info.get("_start", 0.0) or 0.0)
     tc_format = "DF" if main_info.get("drop_frame") else "NDF"
     if media_start:
-        log("08", f"訪談影片帶有時間碼 {main_info.get('timecode')}"
-                  f"（{tc_format}），素材起點 = {media_start:.3f}s")
+        log("08", f"訪談影片時間碼 {main_info.get('timecode')}（{tc_format}）"
+                  f"→ 素材起點 {media_start:.3f}s")
+    elif main_info.get("timecode"):
+        warn("08", f"讀到時間碼 {main_info['timecode']} 但換算成 0s，格式可能不認得")
+    else:
+        log("08", "訪談影片沒有嵌入時間碼，素材起點 = 0s")
+    media_dur = float(main_info.get("duration", 0.0))
 
     clips: list[dict] = []
     edit_cursor = 0.0
@@ -140,6 +192,11 @@ def run_stage(cfg, claude=None) -> dict:
         dur = src_e - src_s
         # clip 的 start 與媒體同一個座標系，所以要加上時間碼起點
         clip_start = media_start + src_s
+        if media_dur:                     # 捨入後不能超出媒體尾端
+            dur = min(dur, media_start + media_dur - clip_start)
+            if dur <= 0:
+                warn("08", f"第 {i+1} 段超出素材範圍，略過")
+                continue
         node = ET.SubElement(spine, "asset-clip", {
             "ref": main_id,
             "offset": rate.time(edit_cursor),
@@ -223,6 +280,13 @@ def run_stage(cfg, claude=None) -> dict:
     # ---- 字幕（lane -1 / -2）----------------------------------------------
     n_cap = _apply_captions(cfg, clips, subs["cues"], rate, owner, local)
 
+    problems = _validate_ranges(root, res.ranges)
+    if problems:
+        warn("08", f"有 {len(problems)} 個 clip 取用的範圍超出素材的媒體範圍，"
+                   "Final Cut Pro 會說「沒有個別媒體，剪輯無效」：")
+        for line in problems[:5]:
+            warn("08", f"  {line}")
+
     out = cfg.build_file("08_timeline.fcpxml")
     _write(root, out)
     log("08", f"FCPXML 完成：{len(clips)} 段主畫面、{n_broll} 段 B-roll、"
@@ -256,7 +320,7 @@ def build_probe(cfg) -> Path:
     dur = max(rate.seconds(2), src_e - src_s)
 
     root = ET.Element("fcpxml", {"version": "1.11"})
-    res = _Res(root)
+    res = _Res(root, _timecode_overrides(cfg))
     fmt = res.format(int(seq["width"]), int(seq["height"]), rate)
     aid, info = res.asset(ingest["source"]["path"])
     media_start = float(info.get("_start", 0.0) or 0.0)
@@ -430,6 +494,33 @@ def _validate_attributes(root: ET.Element) -> None:
             "產生的 FCPXML 有 Final Cut Pro 不接受的屬性，已中止寫檔：\n  "
             + "\n  ".join(uniq[:10])
             + (f"\n  …另有 {len(uniq) - 10} 項" if len(uniq) > 10 else ""))
+
+
+def _validate_ranges(root: ET.Element, ranges: dict) -> list[str]:
+    """
+    檢查每個 clip 取用的時間範圍都確實落在素材的媒體範圍內。
+
+    超出範圍的 clip 會讓 Final Cut Pro 說「沒有個別媒體，剪輯無效」——
+    這是最容易在時間碼換算上出錯的地方，所以寫檔前一定要驗。
+    """
+    problems: list[str] = []
+    for el in root.iter():
+        if el.tag not in ("asset-clip", "video"):
+            continue
+        rng = ranges.get(el.get("ref", ""))
+        if rng is None:
+            continue
+        a_start, a_dur, name = rng
+        if a_dur <= 0:                      # 靜態照片沒有時間範圍
+            continue
+        c_start = parse_fcp_time(el.get("start", "0s"))
+        c_dur = parse_fcp_time(el.get("duration", "0s"))
+        tol = 1.0 / 24                      # 容許一格的捨入誤差
+        if c_start < a_start - tol or c_start + c_dur > a_start + a_dur + tol:
+            problems.append(
+                f'{name}：clip 取 {c_start:.3f}–{c_start + c_dur:.3f}s，'
+                f'但媒體只有 {a_start:.3f}–{a_start + a_dur:.3f}s')
+    return problems
 
 
 def _write(root: ET.Element, path: Path) -> None:

@@ -348,6 +348,36 @@ python run.py --check
 `transcribe.model` 從 `large-v3` 換成 `medium`，速度快 2–3 倍，
 英文訪談的準確度差距不大。
 
+**人名、船名被聽錯（例如 Issa 應該是 Isa）**
+
+在 `project.yaml` 加一張修正表。它會同時套用到英文字幕、中文翻譯與說明欄，
+並且會寫進翻譯的提示詞裡，讓 AI 一開始就用正確拼法：
+
+```yaml
+corrections:
+  Issa: "Isa"
+  RA Vig: "Ragnar Vig"
+  荷巴特: "霍巴特"
+```
+
+英數詞比對時不分大小寫、且認單字邊界 —— `Issa` 不會誤中 `Issabella`。
+改完 `python run.py --only 04 09` 重跑字幕與說明欄即可。
+
+**字幕換行太頻繁／每張字卡想放更多字**
+
+一張字幕能裝多少字由 `max_chars_en × max_lines` 決定（英文的字數預算同時
+決定了中英兩邊的斷句位置，因為中文是逐句翻譯過來的）：
+
+```yaml
+subtitles:
+  max_chars_en: 55        # 每行英文字元上限，同時放寬每張字卡的容量
+  max_chars_zh: 26        # 每行中文字數上限，調大就少換行
+  max_lines: 2
+  max_duration: 8.0       # 一張字卡最長停留幾秒，調大則字卡更少更長
+```
+
+改完 `python run.py --only 04` 重跑即可（會重新翻譯，約數分鐘）。
+
 **想改 AI 的判斷標準**
 
 所有提示詞都是 `prompts/` 底下的 markdown，直接改就生效，不用動程式碼。

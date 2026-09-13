@@ -126,6 +126,9 @@ DEFAULTS: dict[str, Any] = {
         "title": "",                 # 留空 = 由 AI 產生
         "subtitle": "",
     },
+    # 字詞修正：訂正語音辨識聽錯的人名／船名／專有名詞，{聽錯的: 正確的}
+    # 會同時套用到英文字幕、中文翻譯與說明欄
+    "corrections": {},
     # 個別素材的時間碼覆寫：{檔名: "HH:MM:SS;FF"}
     "media_timecodes": {},
     "claude": {

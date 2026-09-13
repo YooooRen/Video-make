@@ -97,7 +97,7 @@ class FakeClaude:
             return {"SPEAKER_00": {"x": 0.28, "y": 0.40},
                     "SPEAKER_01": {"x": 0.72, "y": 0.42}}
         if "YouTube 頻道編輯" in prompt:
-            return {"titles": ["Sailing Talk"], "hook": "hook",
+            return {"titles": ["Sailing Talk"], "hook": "hook about word0_1",
                     "summary_zh": "摘要", "summary_en": "Summary",
                     "people": [{"name": "Bernard Moitessier", "role": "navigator",
                                 "context": "mentioned"}],
@@ -363,6 +363,8 @@ explainers:
   fps: 30
 thumbnail:
   candidates: 6
+corrections:
+  word0_1: "CORRECTED"
 """, encoding="utf-8")
         cfg = load_config(cfg_path)
         claude = FakeClaude()
@@ -422,6 +424,17 @@ thumbnail:
 
         srt = (b / "subtitles_zh-Hant.srt").read_text()
         check(srt.startswith("1\n") and "-->" in srt, "SRT 格式正確")
+
+        import re as _re
+        en_srt = (b / "subtitles_en.srt").read_text()
+        # word0_1 是 word0_10 / word0_11 的子字串，所以要用單字邊界判斷，
+        # 順便驗證修正只換完整的詞、不會誤傷更長的詞
+        standalone = _re.search(r"(?<![A-Za-z0-9])word0_1(?![A-Za-z0-9])", en_srt)
+        check("CORRECTED" in en_srt, "corrections 有套用到英文字幕")
+        check(standalone is None, "只換完整單字（word0_10 等更長的詞沒被誤傷）")
+        check("word0_10" in en_srt, "更長的詞確實保持原樣")
+        check("CORRECTED" in (b / "09_description.md").read_text(),
+              "corrections 有套用到說明欄")
 
         test_fcpxml(b / "08_timeline.fcpxml", Rate(FPS_N, FPS_D))
 

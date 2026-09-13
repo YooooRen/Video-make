@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from .claude_client import load_prompt
-from .util import fmt_hhmmss, log, read_json, warn, write_json, write_text
+from .util import (apply_corrections, fmt_hhmmss, log, read_json, warn,
+                   write_json, write_text)
 
 
 def run_stage(cfg, claude=None) -> dict:
@@ -15,8 +16,9 @@ def run_stage(cfg, claude=None) -> dict:
         warn("09", "沒有 Claude client，跳過說明欄生成")
         return _save(cfg, {})
 
-    lines = [f'{c["s"]:.0f} {c["speaker"]}: {c["en"]}'.replace("\n", " ")
-             for c in subs["cues"]]
+    corrections = cfg.get("corrections", {}) or {}
+    lines = [apply_corrections(f'{c["s"]:.0f} {c["speaker"]}: {c["en"]}', corrections)
+             .replace("\n", " ") for c in subs["cues"]]
     speakers = "、".join(
         f'{v.get("name") or k}（{v.get("role","")}）' for k, v in tr.get("speakers", {}).items())
 
@@ -149,4 +151,5 @@ def _write_description(cfg, data, total: float) -> None:
           "- English：`build/subtitles_en.srt`", "",
           "兩個都上傳，觀眾就能在播放器裡自由切換中／英隱藏式字幕。", ""]
 
-    write_text(cfg.build_file("09_description.md"), "\n".join(L))
+    write_text(cfg.build_file("09_description.md"),
+               apply_corrections("\n".join(L), cfg.get("corrections", {}) or {}))

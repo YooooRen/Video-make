@@ -5,7 +5,8 @@ import re
 
 from .claude_client import load_prompt
 from .timeline import EditMap, Rate, write_srt, write_vtt
-from .util import chunked, log, read_json, warn, write_json, write_text
+from .util import (apply_corrections, chunked, log, read_json, warn,
+                   write_json, write_text)
 
 _SENT_END = re.compile(r"[.!?…]$")
 _NO_SPACE_BEFORE = set(".,!?;:%)]}'’")
@@ -101,6 +102,7 @@ def _build_cues(cfg, words, roles) -> list[dict]:
     max_dur = float(cfg.get("subtitles.max_duration", 6.0))
     gap_break = float(cfg.get("subtitles.gap_break", 0.55))
     budget = max_chars * max_lines
+    corrections = cfg.get("corrections", {}) or {}
 
     cues: list[dict] = []
     cur: list[dict] = []
@@ -117,7 +119,8 @@ def _build_cues(cfg, words, roles) -> list[dict]:
             "e": cur[-1]["e"],
             "spk": spk,
             "speaker": who.get("name") or who.get("role") or spk,
-            "en": _wrap(_join(toks), max_chars, max_lines),
+            "en": _wrap(apply_corrections(_join(toks), corrections),
+                        max_chars, max_lines),
             "zh": "",
         })
         cur.clear()
@@ -176,7 +179,11 @@ def _glossary(cfg, claude, tr) -> list[dict]:
 
 def _translate(cfg, claude, cues, glossary) -> None:
     tmpl = load_prompt("translate_zhtw.md")
+    corrections = cfg.get("corrections", {}) or {}
     gl = "\n".join(f'- {d["en"]} → {d["zh"]}' for d in glossary) or "（無）"
+    if corrections:
+        gl += "\n\n【人名與專有名詞的正確寫法，請務必照這個拼】\n"
+        gl += "\n".join(f"- {k} → {v}" for k, v in corrections.items())
     max_chars = int(cfg.get("subtitles.max_chars_zh", 18))
     batch = int(cfg.get("subtitles.translate_batch", 25))
     idx = {c["id"]: c for c in cues}
@@ -212,7 +219,8 @@ def _translate(cfg, claude, cues, glossary) -> None:
             cue = idx.get(it.get("id"))
             zh = str(it.get("zh", "")).strip()
             if cue is not None and zh:
-                cue["zh"] = _wrap_zh(zh, max_chars, int(cfg.get("subtitles.max_lines", 2)))
+                cue["zh"] = _wrap_zh(apply_corrections(zh, corrections), max_chars,
+                                     int(cfg.get("subtitles.max_lines", 2)))
                 got += 1
         if got < len(group):
             warn("04", f"第 {bi+1} 批有 {len(group)-got} 則沒翻到")

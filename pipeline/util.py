@@ -285,6 +285,27 @@ def _balanced_block(text: str) -> str | None:
     return None
 
 
+def apply_corrections(text: str, mapping: dict[str, str]) -> str:
+    """
+    套用字詞修正表，用來訂正語音辨識聽錯的人名、船名、專有名詞。
+
+    英數詞會以單字邊界比對且不分大小寫（"Issa" 不會誤中 "Issabella"）；
+    中文與其他字元則直接字串取代。較長的詞優先，避免部分重疊互相干擾。
+    """
+    if not text or not mapping:
+        return text
+    for src in sorted(mapping, key=len, reverse=True):
+        dst = str(mapping[src])
+        if not src:
+            continue
+        if re.search(r"[A-Za-z0-9]", src):
+            pattern = rf"(?<![A-Za-z0-9]){re.escape(src)}(?![A-Za-z0-9])"
+            text = re.sub(pattern, lambda _m, d=dst: d, text, flags=re.IGNORECASE)
+        else:
+            text = text.replace(src, dst)
+    return text
+
+
 def chunked(items: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
     for i in range(0, len(items), size):
         yield items[i:i + size]

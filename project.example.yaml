@@ -15,6 +15,14 @@ project:
 
 media_timecodes: {}                     # {檔名: "HH:MM:SS;FF"}
 
+# 字詞修正：訂正語音辨識聽錯的人名、船名、專有名詞。
+# 會同時套用到英文字幕、中文翻譯與說明欄；英數詞比對時不分大小寫且認單字邊界。
+corrections: {}
+# corrections:
+#   Issa: "Isa"
+#   RA Vig: "Ragnar Vig"
+#   荷巴特: "霍巴特"
+
 sequence:
   width: 0        # 0 = 沿用原始影片
   height: 0

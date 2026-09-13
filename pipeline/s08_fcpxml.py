@@ -414,7 +414,14 @@ def _apply_framing(cfg, clips, shots, rate: Rate) -> int:
 # ------------------------------------------------------------ 字幕處理 -----
 
 def _apply_captions(cfg, clips, cues, rate: Rate, owner, local) -> int:
+    mode = str(cfg.get("subtitles.fcp_captions", "both")).lower()
     tracks = [("zh", "zh-Hant", "-1"), ("en", "en", "-2")]
+    if mode == "zh":
+        tracks = [("zh", "zh-Hant", "-1")]
+    elif mode == "en":
+        tracks = [("en", "en", "-1")]
+    elif mode == "none":
+        tracks = []
     count = 0
     for cue in cues:
         c = owner(float(cue["s"]))

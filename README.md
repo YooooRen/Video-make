@@ -275,6 +275,22 @@ media_timecodes:
 現在寫檔前會檢查每個 offset / duration 是不是序列影格的整數倍，不合就警告
 並指出是哪個項目差多少格。
 
+**FCP 裡中英字幕疊在一起同時出現**
+
+這是 FCP 的顯示設定，不是錯誤 —— 兩條字幕軌都被啟用時會一起畫上去。
+關掉其中一條：**時間軸索引**（`Shift+Cmd+2`）→「角色」分頁 → 取消勾選該字幕角色。
+選單列的 **檢視 → 字幕** 也可以整個關掉或切換語言。
+
+不想在 FCP 裡放兩條的話：
+
+```yaml
+subtitles:
+  fcp_captions: "zh"     # both / zh / en / none
+```
+
+YouTube 的隱藏式字幕不受影響 —— 那是上傳 `build/subtitles_zh-Hant.srt` 與
+`subtitles_en.srt` 兩個檔案，跟 FCP 裡放幾條無關。
+
 **素材路徑變動後 FCP 找不到檔案**
 
 FCPXML 只是剪輯指令，不含影像資料。匯入前不要搬動原始影片與素材；真的搬了，

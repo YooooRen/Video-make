@@ -60,6 +60,8 @@ cleanup:
 subtitles:
   fcp_captions: "both"     # FCP 裡放幾條字幕軌：both / zh / en / none
                            # 只影響 FCP 預覽；YouTube CC 一律用輸出的 .srt
+  glossary_file: ""        # 留空 = build/04_glossary.txt
+                           # 這個檔案可以編輯，你寫的譯法優先，AI 只補沒收錄的新詞
   max_chars_en: 42
   max_chars_zh: 18
   max_lines: 2

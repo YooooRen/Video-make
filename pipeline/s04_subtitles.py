@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .claude_client import load_prompt
 from .timeline import EditMap, Rate, write_srt, write_vtt
@@ -161,19 +162,97 @@ def _polish_timing(cfg, cues, total: float) -> None:
 
 # ------------------------------------------------------------- 翻譯 --------
 
+_GLOSSARY_HEADER = """\
+# ── 翻譯詞彙表 ──────────────────────────────────────────────
+# 這個檔案可以直接編輯，改完重跑 stage 04 就會生效。
+#
+# 每行三欄，用 Tab 分隔：  英文原詞 <TAB> 中文譯法 <TAB> 說明（選填）
+#
+# 你的編輯優先：這裡已經有的詞，AI 不會覆蓋，
+# 它只會在檔尾補上還沒收錄到的新詞。
+# 不要某個詞就刪掉那一行；想完全重新產生就刪掉整個檔案。
+#
+# 人名與船名不收錄在這裡（它們保持英文原樣）。
+# 要訂正聽錯的人名，用 project.yaml 的 corrections。
+# ────────────────────────────────────────────────────────────
+"""
+
+
+def _glossary_path(cfg) -> Path:
+    custom = cfg.get("subtitles.glossary_file", "")
+    return cfg.path(custom) if custom else cfg.build_file("04_glossary.txt")
+
+
+def _read_glossary(path: Path) -> list[dict]:
+    """讀取使用者編輯過的詞彙表。容許用 Tab 或連續空白分欄。"""
+    if not path.exists():
+        return []
+    out: list[dict] = []
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t") if "\t" in line else re.split(r"\s{2,}", line)
+        parts = [p.strip() for p in parts if p.strip()]
+        if len(parts) < 2:
+            warn("04", f"詞彙表第 {lineno} 行少了中文譯法，略過：{line[:40]}")
+            continue
+        out.append({"en": parts[0], "zh": parts[1],
+                    "note": parts[2] if len(parts) > 2 else ""})
+    return out
+
+
+def _write_glossary(path: Path, items: list[dict]) -> None:
+    body = "\n".join(f'{d["en"]}\t{d["zh"]}\t{d.get("note", "")}'.rstrip("\t")
+                     for d in items)
+    write_text(path, _GLOSSARY_HEADER + body + "\n")
+
+
 def _glossary(cfg, claude, tr) -> list[dict]:
+    """
+    建立翻譯用的術語對照表。
+
+    使用者編輯過的內容一律優先：既有的詞不會被覆蓋，AI 只負責補上
+    還沒收錄到的新詞（例如換了更長的影片之後新出現的術語）。
+    """
+    path = _glossary_path(cfg)
+    user_items = _read_glossary(path)
+    have = {d["en"].strip().lower() for d in user_items}
+    if user_items:
+        log("04", f"沿用你編輯的詞彙表 {len(user_items)} 個詞（{path.name}）")
+
     text = " ".join(s["text"] for s in tr["segments"])[:60000]
+    existing = "\n".join(f'- {d["en"]}' for d in user_items) or "（目前沒有）"
     try:
         data = claude.ask_json(
-            load_prompt("glossary.md").replace("{{TRANSCRIPT}}", text), label="04")
+            load_prompt("glossary.md")
+            .replace("{{EXISTING}}", existing)
+            .replace("{{TRANSCRIPT}}", text), label="04")
     except Exception as exc:  # noqa: BLE001
-        warn("04", f"詞彙表建立失敗（{exc}），繼續翻譯")
-        return []
-    items = [d for d in (data if isinstance(data, list) else [])
-             if isinstance(d, dict) and d.get("en") and d.get("zh")]
-    log("04", f"建立詞彙表 {len(items)} 個專有名詞")
-    write_text(cfg.build_file("04_glossary.txt"),
-               "\n".join(f'{d["en"]}\t{d["zh"]}\t{d.get("note","")}' for d in items))
+        warn("04", f"詞彙表補充失敗（{exc}），只用現有的繼續翻譯")
+        return user_items
+
+    added = [d for d in (data if isinstance(data, list) else [])
+             if isinstance(d, dict) and d.get("en") and d.get("zh")
+             and d["en"].strip().lower() not in have]
+    # 同一批回覆裡也可能重複，再去一次重
+    seen = set(have)
+    deduped = []
+    for d in added:
+        key = d["en"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"en": d["en"], "zh": d["zh"], "note": d.get("note", "")})
+
+    items = user_items + deduped
+    if deduped:
+        log("04", f"AI 補上 {len(deduped)} 個新詞，共 {len(items)} 個")
+    elif not user_items:
+        log("04", f"建立詞彙表 {len(items)} 個專有名詞")
+    else:
+        log("04", "沒有需要補充的新詞")
+    _write_glossary(path, items)
     return items
 
 

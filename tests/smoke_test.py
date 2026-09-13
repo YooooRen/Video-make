@@ -51,6 +51,9 @@ class FakeClaude:
     calls = 0
     cache_hits = 0
 
+    def __init__(self) -> None:
+        self.glossary_prompts: list[str] = []
+
     def summary(self) -> str:
         return f"FakeClaude 呼叫 {self.calls} 次"
 
@@ -68,8 +71,10 @@ class FakeClaude:
             return {"removals": [{"from": idx[0], "to": idx[0],
                                   "kind": "filler", "reason": "um"}]}
         if "航海／帆船專有名詞" in prompt:
-            return [{"en": "beam reach", "zh": "橫風航行", "note": "風從側面來"}]
+            return [{"en": "beam reach", "zh": "橫風航行", "note": "風從側面來"},
+                    {"en": "tacking", "zh": "搶風轉向", "note": "逆風之字前進"}]
         if "字幕譯者" in prompt:
+            self.glossary_prompts.append(prompt)
             ids = []
             for line in prompt.splitlines():
                 head = line.split("|")[0].strip()
@@ -435,6 +440,34 @@ corrections:
         check("word0_10" in en_srt, "更長的詞確實保持原樣")
         check("CORRECTED" in (b / "09_description.md").read_text(),
               "corrections 有套用到說明欄")
+
+        print("\n▶ 可編輯的詞彙表")
+        gl = b / "04_glossary.txt"
+        first = gl.read_text()
+        check("beam reach" in first and "橫風航行" in first, "首次執行由 AI 建立詞彙表")
+        check(first.startswith("#"), "檔案帶有說明用的註解開頭")
+
+        # 模擬使用者編輯：改掉 AI 的譯法、加一個自訂詞、
+        # 故意用連續空白而非 Tab 分欄、留一行註解
+        gl.write_text(
+            "# 我自己加的註解\n"
+            "beam reach\t自訂譯法\t使用者改的\n"
+            "jury rig     應急帆裝     使用者新增的詞\n",
+            encoding="utf-8")
+        s04_subtitles.run_stage(cfg, claude)
+        after = gl.read_text()
+        check("自訂譯法" in after, "使用者的譯法沒有被 AI 覆蓋")
+        check("橫風航行" not in after, "AI 沒有把同一個詞重複加回去")
+        check("應急帆裝" in after, "使用者新增的詞保留下來")
+        check("搶風轉向" in after, "AI 補上了使用者沒收錄的新詞")
+        check(after.index("應急帆裝") < after.index("搶風轉向"),
+              "使用者的詞排在前面，AI 補的接在後面")
+        check("連續空白" not in after and "jury rig" in after,
+              "用空白分欄的那行也讀得進來")
+
+        # 詞彙表確實被送進翻譯的提示詞
+        used = [c for c in claude.glossary_prompts if "自訂譯法" in c]
+        check(bool(used), "編輯後的譯法有送進翻譯提示詞")
 
         test_fcpxml(b / "08_timeline.fcpxml", Rate(FPS_N, FPS_D))
 

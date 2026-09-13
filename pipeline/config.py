@@ -69,6 +69,9 @@ DEFAULTS: dict[str, Any] = {
         "lead_in": 0.06,             # 字幕提早出現
         "tail_out": 0.20,            # 字幕延後消失（不超過下一張）
         "translate_batch": 25,
+        # 詞彙表檔案。留空 = build/04_glossary.txt。
+        # 這個檔案可以編輯，你寫的譯法優先，AI 只會補上沒收錄的新詞。
+        "glossary_file": "",
         "burn_in": False,            # True = 另外輸出燒錄字幕影片（YouTube CC 不需要）
         # FCPXML 裡要放哪幾條字幕軌：both（中英各一）/ zh / en / none。
         # 這只影響 FCP 裡的預覽；YouTube 的隱藏式字幕一律用輸出的 .srt 檔。

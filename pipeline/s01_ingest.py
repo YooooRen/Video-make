@@ -1,8 +1,11 @@
 """Stage 01：檢查素材、決定時間軸格式、抽出給語音辨識用的音軌。"""
 from __future__ import annotations
 
+from pathlib import Path
+
 from .timeline import Rate
-from .util import StageError, log, media_info, require, run, write_json
+from .util import (StageError, file_sig, log, media_info, read_json,
+                   require, run, write_json)
 
 
 def run_stage(cfg, claude=None) -> dict:
@@ -29,12 +32,22 @@ def run_stage(cfg, claude=None) -> dict:
 
     # ---- 抽音軌（16k mono，Whisper 的原生取樣率）----------------------------
     audio = cfg.build_file("audio.wav")
-    if audio.exists() and audio.stat().st_mtime > src.stat().st_mtime:
-        log("01", "音軌已存在，沿用")
+    stamp = cfg.build_file("audio.source.json")
+    sig = {"sig": file_sig(src), "path": str(src)}
+    # 用來源檔的指紋判斷，不能用「音軌比來源新」——換成另一支較舊的影片時，
+    # 舊音軌反而比較新，會被誤判成可以沿用，於是整條 pipeline 都在處理上一支片。
+    cached = read_json(stamp, default={})
+    if audio.exists() and cached.get("sig") == sig["sig"]:
+        log("01", "音軌已存在且來源相同，沿用")
     else:
-        log("01", "抽出音軌 → audio.wav")
+        if audio.exists():
+            prev = Path(cached.get("path", "")).name or "先前的來源"
+            log("01", f"來源已變更（{prev} → {src.name}），重新抽音軌")
+        else:
+            log("01", "抽出音軌 → audio.wav")
         run(["ffmpeg", "-y", "-v", "error", "-i", str(src),
              "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio)])
+        write_json(stamp, sig)
 
     out = {
         "source": info,

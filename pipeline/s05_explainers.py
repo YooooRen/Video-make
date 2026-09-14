@@ -1,6 +1,8 @@
 """Stage 05：找出航線／專有名詞，生成說明短片（含 alpha 的 ProRes 4444）。"""
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 from . import render
@@ -29,9 +31,12 @@ def run_stage(cfg, claude=None) -> dict:
 
     out_dir = cfg.build / "explainers"
     out_dir.mkdir(parents=True, exist_ok=True)
+    style = _style_fingerprint(cfg)
     rendered: list[dict] = []
     for i, it in enumerate(items):
-        name = f'{i:02d}_{it["kind"]}'
+        # 檔名帶內容指紋：換了影片或改了樣式，舊檔就不會被誤用。
+        # 只用編號當檔名的話，第 00 段換成別的名詞時仍會沿用上一支的算圖。
+        name = f'{i:02d}_{it["kind"]}_{_content_hash(it, style)}'
         out = out_dir / f"{name}.mov"
         if out.exists():
             log("05", f"  {name} 已存在，沿用")
@@ -53,6 +58,21 @@ def run_stage(cfg, claude=None) -> dict:
 
     log("05", f"完成 {len(rendered)} 段說明短片 → build/explainers/")
     return _save(cfg, {"items": rendered})
+
+
+def _style_fingerprint(cfg) -> str:
+    """影響算圖結果的設定；改了就要重新算。"""
+    keys = ("explainers.width", "explainers.height", "explainers.fps",
+            "explainers.duration", "explainers.fade", "explainers.route_style",
+            "explainers.font_path")
+    return json.dumps([cfg.get(k) for k in keys], ensure_ascii=False)
+
+
+def _content_hash(item: dict, style: str) -> str:
+    """同一段說明的內容指紋。at（排在第幾秒）不影響畫面，所以不列入。"""
+    payload = {k: v for k, v in item.items() if k not in ("at", "path")}
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True) + style
+    return hashlib.sha1(raw.encode()).hexdigest()[:8]
 
 
 def _save(cfg, data) -> dict:

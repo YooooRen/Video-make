@@ -312,6 +312,22 @@ brew install geos proj && pip install cartopy
 python run.py --only 05
 ```
 
+**換了來源影片，但字幕還是上一支的內容**
+
+已修掉（`git pull` 後重跑）。原本 stage 01 用「音軌比來源新就沿用」判斷快取，
+換成一支**修改時間較舊**的影片時（相機檔的日期通常就是拍攝當天），舊音軌反而
+比較新，於是整條 pipeline 又處理了一次上一支片。現在改用來源檔的指紋判斷，
+換片時會明確印出「來源已變更（A → B），重新抽音軌」。
+
+同理，`build/explainers/` 的算圖檔名現在帶內容指紋，換了影片或改了樣式就會
+重新算，不會誤用上一支的畫面。
+
+想完全從頭來過，最保險的還是砍掉重練：
+
+```bash
+rm -rf build && python run.py
+```
+
 **轉錄太慢**
 
 `transcribe.model` 從 `large-v3` 換成 `medium`，速度快 2–3 倍，英文訪談的

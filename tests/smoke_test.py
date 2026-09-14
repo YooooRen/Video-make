@@ -352,6 +352,51 @@ corrections:
         s06_fcpxml.run_stage(cfg, claude)
         test_fcpxml(b / "06_timeline.fcpxml", Rate(FPS_N, FPS_D))
 
+        print("\n▶ 換來源影片時的快取失效")
+        # 重現實際踩到的情境：新來源的修改時間「比既有音軌還舊」。
+        # 若用 mtime 比大小判斷，就會誤以為音軌還新、繼續沿用上一支片的音訊。
+        import os
+        from pipeline.util import media_info
+        before = media_info(cfg.build / "audio.wav")["duration"]
+        src2 = tmp / "interview2.mov"
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+             "-i", "testsrc2=size=640x360:rate=30000/1001:duration=8",
+             "-f", "lavfi", "-i", "sine=duration=8",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+             "-shortest", str(src2)], check=True)
+        old_time = (cfg.build / "audio.wav").stat().st_mtime - 86400
+        os.utime(src2, (old_time, old_time))
+        check(src2.stat().st_mtime < (cfg.build / "audio.wav").stat().st_mtime,
+              "新來源的修改時間確實比既有音軌舊（重現問題情境）")
+
+        cfg2_path = tmp / "project2.yaml"
+        cfg2_path.write_text(
+            f'project:\n  source_video: "{src2}"\n  build_dir: "{tmp}/build"\n',
+            encoding="utf-8")
+        cfg2 = load_config(cfg2_path)
+        s01_ingest.run_stage(cfg2, claude)
+        after = media_info(cfg.build / "audio.wav")["duration"]
+        check(abs(before - DUR) < 1.0, f"換片前音軌是第一支影片（{before:.1f}s）")
+        check(abs(after - 8.0) < 1.0,
+              f"換片後音軌重新抽取自新影片（{after:.1f}s），沒有沿用舊的")
+
+        print("\n▶ 說明動畫的內容指紋")
+        from pipeline.s05_explainers import _content_hash, _style_fingerprint
+        style = _style_fingerprint(cfg)
+        item = {"kind": "term", "term_en": "beam reach", "term_zh": "橫風航行",
+                "explain_zh": "風從側面來", "duration": 6.0, "at": 10.0}
+        h1 = _content_hash(item, style)
+        check(_content_hash({**item, "at": 99.0}, style) == h1,
+              "只改插入時間不會重新算圖（at 不影響畫面）")
+        check(_content_hash({**item, "term_zh": "別的名詞"}, style) != h1,
+              "改了內容就換一組指紋（不會誤用舊的算圖）")
+        check(_content_hash(item, style + "x") != h1,
+              "改了樣式設定也會重新算圖")
+        movs = sorted(p.name for p in (cfg.build / "explainers").glob("*.mov"))
+        check(all(len(m.split("_")) >= 3 for m in movs),
+              f"算圖檔名都帶內容指紋：{movs}")
+
         print("\n▶ 最小探針 (--probe)")
         s06_fcpxml.build_probe(cfg)
         pr = b / "probe_minimal.fcpxml"

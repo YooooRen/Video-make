@@ -6,7 +6,7 @@ import shutil
 import unicodedata
 from pathlib import Path
 
-from .util import IMAGE_EXT, VIDEO_EXT, have, iter_media, media_info
+from .util import have, media_info
 
 OK, WARN, FAIL = "✅", "⚠️ ", "❌"
 
@@ -53,7 +53,6 @@ def check(cfg) -> int:
     _tools(cfg, r)
     _packages(r)
     _source(cfg, r)
-    _media(cfg, r)
     _font(cfg, r)
     _diarization(cfg, r)
     _disk(cfg, r)
@@ -142,34 +141,6 @@ def _source(cfg, r: _Report) -> None:
               "若 FCP 說「沒有個別媒體」，請用 project.source_timecode 指定")
     if mins > 120:
         r.add(WARN, "  片長", f"{mins:.0f} 分鐘偏長，轉錄可能要一小時以上")
-
-
-def _media(cfg, r: _Report) -> None:
-    raw = cfg.get("project.media_dir", "")
-    if not raw:
-        r.add(WARN, "素材資料夾", "沒有設定 → 不會有 B-roll")
-        return
-    d = cfg.path(raw)
-    if not d.exists():
-        r.add(FAIL, "素材資料夾", f"找不到 {d}")
-        return
-
-    src = cfg.path(cfg.get("project.source_video", "") or ".")
-    vids = [p for p in iter_media(d, VIDEO_EXT) if p.resolve() != src.resolve()]
-    imgs = iter_media(d, IMAGE_EXT)
-    total = len(vids) + len(imgs)
-    cap = int(cfg.get("broll.max_index", 80))
-
-    if total == 0:
-        r.add(WARN, "素材資料夾", f"{d} 裡沒有影片或照片 → 不會有 B-roll")
-        return
-    r.add(OK, "素材資料夾", f"{len(vids)} 支影片、{len(imgs)} 張照片")
-    if total > cap:
-        r.add(WARN, "  素材數量",
-              f"共 {total} 份，超過 broll.max_index={cap}，只會辨識前 {cap} 份")
-    if src.exists() and d.resolve() == src.parent.resolve():
-        r.add(WARN, "  素材位置",
-              "與訪談影片同一個資料夾，無關檔案也會被當成 B-roll 候選")
 
 
 def _font(cfg, r: _Report) -> None:

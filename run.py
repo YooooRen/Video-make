@@ -7,7 +7,7 @@ AI 訪談影片自動剪輯 pipeline —— 總控制台。
     python run.py --probe              # 產生最小 FCPXML，排查 FCP 匯入問題
     python run.py                      # 從頭跑到尾
     python run.py --from 04            # 從第 4 階段接著跑
-    python run.py --only 05 06         # 只重跑 B-roll 與說明短片
+    python run.py --only 05            # 只重跑說明動畫
     python run.py --list               # 看有哪些階段
 """
 from __future__ import annotations
@@ -19,24 +19,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pipeline import (s01_ingest, s02_transcribe, s03_clean, s04_subtitles,   # noqa: E402
-                      s05_broll, s06_explainers, s07_framing, s08_fcpxml,
-                      s09_package, s10_thumbnail)
+from pipeline import (s01_ingest, s02_transcribe, s03_clean,                 # noqa: E402
+                      s04_subtitles, s05_explainers, s06_fcpxml)
 from pipeline.claude_client import ClaudeClient                                # noqa: E402
 from pipeline.config import load_config                                        # noqa: E402
 from pipeline.util import StageError, log                                      # noqa: E402
 
 STAGES = [
-    ("01", "ingest",     "檢查素材、抽音軌",             s01_ingest,     False),
-    ("02", "transcribe", "語音轉文字 + 說話者分離",       s02_transcribe, True),
-    ("03", "clean",      "去贅詞、去停頓、決定剪輯點",     s03_clean,      True),
-    ("04", "subtitles",  "生成中英雙語字幕",             s04_subtitles,  True),
-    ("05", "broll",      "素材辨識 + B-roll 排片",       s05_broll,      True),
-    ("06", "explainers", "航線圖／名詞卡說明短片",        s06_explainers, True),
-    ("07", "framing",    "依說話者決定鏡位",             s07_framing,    True),
-    ("08", "fcpxml",     "組出 Final Cut Pro 時間軸",    s08_fcpxml,     False),
-    ("09", "package",    "標題／說明欄／章節／人名",       s09_package,    True),
-    ("10", "thumbnail",  "封面圖",                      s10_thumbnail,  True),
+    ("01", "ingest",     "檢查素材、抽音軌",              s01_ingest,     False),
+    ("02", "transcribe", "語音轉文字 + 說話者分離",        s02_transcribe, True),
+    ("03", "clean",      "剪掉過久停頓與結巴",             s03_clean,      True),
+    ("04", "subtitles",  "生成中英雙語字幕檔",             s04_subtitles,  True),
+    ("05", "explainers", "航線圖／名詞卡說明動畫",          s05_explainers, True),
+    ("06", "fcpxml",     "組出 Final Cut Pro 時間軸",     s06_fcpxml,     False),
 ]
 _BY_KEY = {}
 for _num, _name, _desc, _mod, _needs in STAGES:
@@ -75,7 +70,7 @@ def main() -> int:
 
     if args.probe:
         try:
-            s08_fcpxml.build_probe(cfg)
+            s06_fcpxml.build_probe(cfg)
         except StageError as exc:
             print(f"❌ {exc}", file=sys.stderr)
             return 1
@@ -132,7 +127,7 @@ def _select(args) -> list:
             out.append(hit)
         return sorted(set(out), key=lambda s: s[0])
     lo = _BY_KEY[args.start][0] if args.start else "01"
-    hi = _BY_KEY[args.end][0] if args.end else "10"
+    hi = _BY_KEY[args.end][0] if args.end else "06"
     if args.start and args.start not in _BY_KEY:
         raise SystemExit(f"❌ 不認識的階段：{args.start}")
     return [s for s in STAGES if lo <= s[0] <= hi]
@@ -144,12 +139,11 @@ def _final_report(cfg) -> None:
     print("  完成。接下來在 Mac 上這樣做：")
     print("═" * 58)
     items = [
-        ("08_timeline.fcpxml", "Final Cut Pro → 檔案 → 匯入 → XML"),
+        ("06_timeline.fcpxml", "Final Cut Pro → 檔案 → 匯入 → XML"),
         ("subtitles_zh-Hant.srt", "上傳到 YouTube 當中文隱藏式字幕"),
         ("subtitles_en.srt", "上傳到 YouTube 當英文隱藏式字幕"),
-        ("09_description.md", "標題／說明欄／章節／人名，直接複製貼上"),
-        ("10_thumbnail.png", "封面圖"),
         ("03_cuts.txt", "剪掉了哪些話 —— 進 FCP 前建議掃一眼"),
+        ("04_glossary.txt", "術語對照表，可編輯後重跑 stage 04"),
     ]
     for name, note in items:
         p = b / name

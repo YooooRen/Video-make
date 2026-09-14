@@ -1,11 +1,8 @@
 """Stage 01：檢查素材、決定時間軸格式、抽出給語音辨識用的音軌。"""
 from __future__ import annotations
 
-from pathlib import Path
-
 from .timeline import Rate
-from .util import (IMAGE_EXT, VIDEO_EXT, StageError, iter_media, log,
-                   media_info, require, run, write_json)
+from .util import StageError, log, media_info, require, run, write_json
 
 
 def run_stage(cfg, claude=None) -> dict:
@@ -25,6 +22,10 @@ def run_stage(cfg, claude=None) -> dict:
     rate = Rate.parse(cfg.get("sequence.fps") or None, fallback=src_rate)
     log("01", f"時間軸 {width}x{height} @ {rate.fps:.3f}fps "
               f"（原始 {info.get('width')}x{info.get('height')} @ {src_rate.fps:.3f}）")
+    if info.get("timecode"):
+        log("01", f"嵌入時間碼 {info['timecode']}"
+                  f"（{'DF' if info.get('drop_frame') else 'NDF'}）"
+                  f" → 素材起點 {info.get('start', 0.0):.3f}s")
 
     # ---- 抽音軌（16k mono，Whisper 的原生取樣率）----------------------------
     audio = cfg.build_file("audio.wav")
@@ -35,17 +36,6 @@ def run_stage(cfg, claude=None) -> dict:
         run(["ffmpeg", "-y", "-v", "error", "-i", str(src),
              "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio)])
 
-    # ---- 清點 B-roll 素材 ---------------------------------------------------
-    media_dir = cfg.media_dir
-    videos: list[Path] = []
-    images: list[Path] = []
-    if media_dir:
-        videos = [p for p in iter_media(media_dir, VIDEO_EXT) if p.resolve() != src.resolve()]
-        images = iter_media(media_dir, IMAGE_EXT)
-        log("01", f"素材資料夾：{len(videos)} 支影片、{len(images)} 張照片")
-    elif cfg.get("broll.enabled"):
-        log("01", "沒有設定 project.media_dir，B-roll 階段會自動跳過")
-
     out = {
         "source": info,
         "audio": str(audio),
@@ -54,10 +44,6 @@ def run_stage(cfg, claude=None) -> dict:
             "fps_num": rate.num, "fps_den": rate.den,
             "frame_duration": rate.frame_duration,
             "audio_rate": int(cfg.get("sequence.audio_rate", 48000)),
-        },
-        "broll_candidates": {
-            "videos": [str(p) for p in videos],
-            "images": [str(p) for p in images],
         },
     }
     write_json(cfg.build_file("01_ingest.json"), out)

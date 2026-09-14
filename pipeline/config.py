@@ -18,7 +18,6 @@ DEFAULTS: dict[str, Any] = {
         "name": "Sailing Interview",
         "event": "Sailing Interview",
         "source_video": "",          # 必填：訪談原始影片
-        "media_dir": "",             # 帆船活動影片／相片資料夾（B-roll 來源）
         "build_dir": "build",
         "language": "en",            # 原始語音語言
         "target_language": "zh-Hant",
@@ -75,39 +74,13 @@ DEFAULTS: dict[str, Any] = {
         "burn_in": False,            # True = 另外輸出燒錄字幕影片（YouTube CC 不需要）
         # FCPXML 裡要放哪幾條字幕軌：both（中英各一）/ zh / en / none。
         # 這只影響 FCP 裡的預覽；YouTube 的隱藏式字幕一律用輸出的 .srt 檔。
-        "fcp_captions": "both",
-    },
-    "framing": {
-        "enabled": True,
-        "min_shot": 2.5,             # 一個鏡位至少維持幾秒
-        "max_shot": 14.0,            # 超過就換鏡位，避免呆板
-        "punch_scale": 1.32,         # 特寫放大倍率
-        "wide_scale": 1.0,
-        "return_to_wide_every": 3,   # 每 N 次特寫回一次全景
-        "transition_frames": 1,      # 鏡位切換的過渡影格數；1 = 硬切
-        "open_wide": True,           # 開場先給全景
-        "open_wide_seconds": 6.0,
-        "speaker_positions": {},     # 手動指定誰在畫面左／右
-        "probe_frames": 12,          # 抽幾張畫面讓 AI 判斷誰坐在左／右
-    },
-    "broll": {
-        "enabled": True,
-        "min_duration": 2.5,
-        "max_duration": 6.0,
-        "min_gap": 12.0,             # 兩段 B-roll 之間至少間隔
-        "max_count": 40,
-        "protect_head": 8.0,         # 開頭幾秒不蓋 B-roll（讓觀眾看到人）
-        "protect_tail": 5.0,
-        "frames_per_clip": 6,        # 每支素材抽幾張做內容辨識
-        "contact_sheet_cols": 3,
-        "still_duration": 4.0,       # 照片素材的預設長度
-        "index_concurrency": 3,
-        "max_index": 80,             # 最多辨識幾份素材，避免 temp 資料夾爆量燒額度
+        "fcp_captions": "zh",
     },
     "explainers": {
         "enabled": True,
         "max_count": 12,
         "duration": 6.0,
+        "min_gap": 15.0,             # 兩段說明之間至少間隔幾秒
         "fade": 0.5,
         "width": 1920,
         "height": 1080,
@@ -120,14 +93,6 @@ DEFAULTS: dict[str, Any] = {
             "/Library/Fonts/Arial Unicode.ttf",
         ],
         "font_path": "",             # 手動指定則優先
-    },
-    "thumbnail": {
-        "enabled": True,
-        "width": 1280,
-        "height": 720,
-        "candidates": 12,
-        "title": "",                 # 留空 = 由 AI 產生
-        "subtitle": "",
     },
     # 字詞修正：訂正語音辨識聽錯的人名／船名／專有名詞，{聽錯的: 正確的}
     # 會同時套用到英文字幕、中文翻譯與說明欄
@@ -198,14 +163,6 @@ class Config:
         if not p.exists():
             raise StageError(f"找不到訪談影片：{p}")
         return p
-
-    @property
-    def media_dir(self) -> Path | None:
-        raw = self.get("project.media_dir", "")
-        if not raw:
-            return None
-        p = self.path(raw)
-        return p if p.exists() else None
 
 
 def load_config(path: str | Path) -> Config:

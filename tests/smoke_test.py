@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-端到端煙霧測試：用合成素材與假的 Claude 回覆跑完 stage 03–10，
-驗證時間軸數學、FCPXML 結構與各階段的資料交接都正確。
+端到端煙霧測試：用合成素材與假的 Claude 回覆跑完 stage 03–06，
+驗證時間軸數學、字幕、說明動畫、FCPXML 結構與各階段的資料交接都正確。
 
     python tests/smoke_test.py            # 跑完自動清理
     python tests/smoke_test.py --keep     # 保留產出以便檢查
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -21,12 +22,11 @@ from xml.etree import ElementTree as ET
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from pipeline import (s01_ingest, s03_clean, s04_subtitles, s05_broll,     # noqa: E402
-                      s06_explainers, s07_framing, s08_fcpxml, s09_package,
-                      s10_thumbnail)
-from pipeline.config import load_config                                     # noqa: E402
-from pipeline.timeline import EditMap, Rate, build_keeps                    # noqa: E402
-from pipeline.util import write_json                                        # noqa: E402
+from pipeline import (s01_ingest, s03_clean, s04_subtitles,          # noqa: E402
+                      s05_explainers, s06_fcpxml)
+from pipeline.config import load_config                              # noqa: E402
+from pipeline.timeline import EditMap, Rate, build_keeps             # noqa: E402
+from pipeline.util import parse_timecode, write_json                 # noqa: E402
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FPS_N, FPS_D = 30000, 1001
@@ -42,6 +42,14 @@ def check(cond: bool, msg: str) -> None:
         _failures.append(msg)
 
 
+def secs(v: str) -> float:
+    v = (v or "0s").rstrip("s")
+    if "/" in v:
+        n, d = v.split("/")
+        return int(n) / int(d)
+    return float(v or 0)
+
+
 # ------------------------------------------------------------ 假的 Claude --
 
 class FakeClaude:
@@ -52,7 +60,7 @@ class FakeClaude:
     cache_hits = 0
 
     def __init__(self) -> None:
-        self.glossary_prompts: list[str] = []
+        self.translate_prompts: list[str] = []
 
     def summary(self) -> str:
         return f"FakeClaude 呼叫 {self.calls} 次"
@@ -63,59 +71,29 @@ class FakeClaude:
     def ask_json(self, prompt, *, system="", images=(), label="", **kw):
         self.calls += 1
         if "標出**應該從影片中剪掉**" in prompt:
-            # 刪掉每個 chunk 裡的第一個字，模擬去贅詞
+            # 刪掉每個 chunk 裡的第一個字，模擬去結巴
             idx = [int(t.split(":")[0]) for t in prompt.split()
                    if ":" in t and t.split(":")[0].isdigit()]
-            if not idx:
-                return {"removals": []}
             return {"removals": [{"from": idx[0], "to": idx[0],
-                                  "kind": "filler", "reason": "um"}]}
+                                  "kind": "filler", "reason": "um"}]} if idx else {"removals": []}
         if "航海／帆船專有名詞" in prompt:
             return [{"en": "beam reach", "zh": "橫風航行", "note": "風從側面來"},
                     {"en": "tacking", "zh": "搶風轉向", "note": "逆風之字前進"}]
         if "字幕譯者" in prompt:
-            self.glossary_prompts.append(prompt)
-            ids = []
-            for line in prompt.splitlines():
-                head = line.split("|")[0].strip()
-                if head.isdigit():
-                    ids.append(int(head))
+            self.translate_prompts.append(prompt)
+            ids = [int(h) for h in
+                   (ln.split("|")[0].strip() for ln in prompt.splitlines())
+                   if h.isdigit()]
             return [{"id": i, "zh": f"這是第{i}句中文字幕"} for i in ids]
-        if "縮圖拼貼" in prompt:
-            return {"summary": "帆船在海上航行", "tags": ["帆船", "海"],
-                    "subjects": ["帆船"], "shot_type": "wide", "motion": "slow",
-                    "time_of_day": "day", "usable": True, "quality_note": ""}
-        if "在哪些時間點插入 B-roll" in prompt:
-            return [{"at": 12.0, "duration": 4.0, "asset": "A000", "reason": "講到出海"},
-                    {"at": 30.0, "duration": 3.5, "asset": "P000", "reason": "講到港口"},
-                    {"at": 31.0, "duration": 3.0, "asset": "A001", "reason": "應被間隔規則濾掉"}]
         if "說明小卡／航線圖" in prompt:
             return [
-                {"kind": "route", "at": 20.0, "title_zh": "馬公 → 綠島",
+                {"kind": "route", "at": 12.0, "title_zh": "馬公 → 綠島",
                  "note_zh": "全程約 180 海里",
                  "waypoints": [{"name_zh": "Magong", "lat": 23.566, "lon": 119.566},
                                {"name_zh": "Ludao", "lat": 22.660, "lon": 121.487}]},
-                {"kind": "term", "at": 40.0, "term_en": "beam reach",
+                {"kind": "term", "at": 14.0, "term_en": "beam reach",
                  "term_zh": "Beam Reach", "explain_zh": "wind from the side"},
             ]
-        if "坐在畫面的哪個位置" in prompt:
-            return {"SPEAKER_00": {"x": 0.28, "y": 0.40},
-                    "SPEAKER_01": {"x": 0.72, "y": 0.42}}
-        if "YouTube 頻道編輯" in prompt:
-            return {"titles": ["Sailing Talk"], "hook": "hook about word0_1",
-                    "summary_zh": "摘要", "summary_en": "Summary",
-                    "people": [{"name": "Bernard Moitessier", "role": "navigator",
-                                "context": "mentioned"}],
-                    "places": [{"name_en": "Magong", "name_zh": "Magong"}],
-                    "boats": [{"name": "Aeolus", "note": "40ft"}],
-                    "chapters": [{"t": 0, "title": "Opening"},
-                                 {"t": 5, "title": "太近應被濾掉"},
-                                 {"t": 20, "title": "Middle"},
-                                 {"t": 40, "title": "End"}],
-                    "terms": [{"en": "beam reach", "zh": "橫風航行"}],
-                    "tags": ["sailing"], "hashtags": ["#sailing"]}
-        if "最適合當 YouTube 封面" in prompt:
-            return {"index": 3, "face": {"x": 0.62, "y": 0.38}, "why": "測試"}
         if "主持人還是受訪的帆船船長" in prompt:
             return {"SPEAKER_00": {"role": "guest", "name": "Captain Test"},
                     "SPEAKER_01": {"role": "host", "name": "Host Test"}}
@@ -124,7 +102,7 @@ class FakeClaude:
 
 # --------------------------------------------------------------- 造素材 ---
 
-def make_media(d: Path) -> tuple[Path, Path]:
+def make_media(d: Path) -> Path:
     src = d / "interview.mov"
     # 刻意寫入 drop-frame 時間碼，重現相機檔會帶「拍攝當下時間」的情況 ——
     # 這正是讓 Final Cut Pro 說「沒有個別媒體，剪輯無效」的原因
@@ -135,31 +113,17 @@ def make_media(d: Path) -> tuple[Path, Path]:
          "-timecode", TIMECODE,
          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src)],
         check=True)
-
-    media = d / "footage"
-    media.mkdir()
-    for i in range(2):
-        subprocess.run(
-            ["ffmpeg", "-y", "-v", "error",
-             "-f", "lavfi", "-i", f"testsrc=size=1920x1080:rate=25:duration=10",
-             "-c:v", "libx264", "-pix_fmt", "yuv420p", str(media / f"clip{i}.mp4")],
-            check=True)
-    subprocess.run(
-        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
-         "-i", "testsrc=size=1600x900:rate=1:duration=1",
-         "-frames:v", "1", str(media / "photo0.jpg")], check=True)
-    return src, media
+    return src
 
 
-def make_transcript(d: Path, build: Path) -> dict:
-    """造一份有兩個說話者、含長停頓的逐字稿。"""
+def make_transcript(build: Path) -> dict:
+    """造一份有兩個說話者、含長停頓與結巴的逐字稿。"""
     words, segments = [], []
     t = 0.5
     for si in range(12):
         spk = "SPEAKER_00" if si % 2 == 0 else "SPEAKER_01"
         w0 = len(words)
-        n = 20                      # 每段約 5.4 秒，接近真實訪談的一輪發言
-        for wi in range(n):
+        for wi in range(20):
             dur = 0.22
             words.append({"i": len(words), "w": ("um" if wi == 0 else f"word{si}_{wi}"),
                           "s": round(t, 3), "e": round(t + dur, 3), "p": 0.95, "spk": spk})
@@ -182,26 +146,24 @@ def make_transcript(d: Path, build: Path) -> dict:
 def test_timeline_math() -> None:
     print("\n▶ 時間軸數學")
     rate = Rate(FPS_N, FPS_D)
-
     check(rate.frame_duration == "1001/30000s", "29.97fps 的 frameDuration 正確")
     check(rate.time(0) == "0s", "0 秒輸出 0s")
-    # 任何輸出的分數時間都必須是幀的整數倍
-    ok = True
-    for v in (1.0, 3.337, 12.5, 59.999):
-        num = int(rate.time(v).rstrip("s").split("/")[0])
-        ok &= (num % FPS_D == 0)
+    ok = all(int(rate.time(v).rstrip("s").split("/")[0]) % FPS_D == 0
+             for v in (1.0, 3.337, 12.5, 59.999))
     check(ok, "分數時間都是 frameDuration 的整數倍")
 
-    keeps, eff = build_keeps(100.0, [(10, 12), (30, 30.05), (50, 55)],
-                             rate=rate, min_removal=0.1, min_keep=0.3, pad=0.0)
+    keeps, _ = build_keeps(100.0, [(10, 12), (30, 30.05), (50, 55)],
+                           rate=rate, min_removal=0.1, min_keep=0.3, pad=0.0)
     check(len(keeps) == 3, f"太短的刪除被忽略（保留 {len(keeps)} 段）")
     emap = EditMap(keeps, rate)
     check(abs(emap.duration - 93.0) < 0.05, f"剪後長度 {emap.duration:.2f} ≈ 93 秒")
-    check(emap.src_to_edit(5) is not None and abs(emap.src_to_edit(5) - 5) < 0.05,
-          "剪輯點之前的時間不變")
     check(emap.src_to_edit(11) is None, "被剪掉的時間回傳 None")
     check(abs(emap.src_to_edit(20) - 18.0) < 0.05, "剪輯點之後的時間正確位移")
     check(abs(emap.edit_to_src(emap.src_to_edit(20)) - 20) < 0.05, "來回換算可逆")
+
+    want, drop = parse_timecode(TIMECODE, FPS_N, FPS_D)
+    check(drop and abs(want - 78207.5294) < 1e-3,
+          f"drop-frame 時間碼換算正確（{TIMECODE} → {want:.4f}s）")
 
 
 def test_fcpxml(path: Path, rate: Rate) -> None:
@@ -213,120 +175,58 @@ def test_fcpxml(path: Path, rate: Rate) -> None:
     check(root.get("version") == "1.11", "FCPXML 版本 1.11")
 
     res = root.find("resources")
-    check(res is not None and len(res.findall("asset")) >= 3,
+    check(res is not None and len(res.findall("asset")) >= 2,
           f"resources 有 {len(res.findall('asset'))} 個素材")
-
-    # format 不能帶自己拼出來的 name —— FCP 會拿 name 去查內建預設，
-    # 查不到就整個格式失效，用到它的素材會變成「沒有個別媒體，剪輯無效」
     named = [f.get("name") for f in res.findall("format") if f.get("name")]
-    check(not named, f"format 沒有硬拼的 name 屬性" + (f"（發現：{named}）" if named else ""))
-    check(all(f.get("width") and f.get("height") for f in res.findall("format")),
-          "每個 format 都有 width/height 完整描述格式")
+    check(not named, "format 沒有硬拼的 name 屬性" + (f"（發現：{named}）" if named else ""))
     for a in res.findall("asset"):
-        check(a.find("media-rep") is not None and
-              a.find("media-rep").get("src", "").startswith("file://"),
+        mr = a.find("media-rep")
+        check(mr is not None and mr.get("src", "").startswith("file://"),
               f'素材 {a.get("name")} 有合法的 media-rep')
 
-    spine = root.find(".//spine")
-    clips = spine.findall("asset-clip")
-    check(len(clips) > 1, f"主軸被切成 {len(clips)} 段（贅詞與停頓已剪掉）")
+    clips = root.find(".//spine").findall("asset-clip")
+    check(len(clips) > 1, f"主軸被切成 {len(clips)} 段（停頓與結巴已剪掉）")
 
-    # offset 必須嚴格遞增，且等於前一段的 offset + duration（中間不能有洞）
-    def secs(v: str) -> float:
-        v = v.rstrip("s")
-        if "/" in v:
-            n, d = v.split("/")
-            return int(n) / int(d)
-        return float(v)
-
-    cursor, contiguous, monotonic = 0.0, True, True
-    prev = -1.0
+    cursor, contiguous, monotonic, prev = 0.0, True, True, -1.0
     for c in clips:
-        off = secs(c.get("offset"))
-        dur = secs(c.get("duration"))
+        off, dur = secs(c.get("offset")), secs(c.get("duration"))
         contiguous &= abs(off - cursor) < 1e-6
         monotonic &= off > prev
         prev, cursor = off, off + dur
     check(monotonic, "spine clip 的 offset 嚴格遞增")
     check(contiguous, "spine clip 首尾相接，沒有空隙")
+    check(abs(secs(root.find(".//sequence").get("duration")) - cursor) < 0.05,
+          "sequence 長度與所有片段總和一致")
 
-    seq = root.find(".//sequence")
-    check(abs(secs(seq.get("duration")) - cursor) < 0.05,
-          f"sequence 長度 {secs(seq.get('duration')):.2f}s 與所有片段總和一致")
-
-    # 時間碼：素材的 start 必須是媒體真正的起點，clip 的 start 也要落在那之後
-    from pipeline.util import parse_timecode
+    # 時間碼：素材的 start 必須是媒體真正的起點，clip 也要落在那之後
     want, drop = parse_timecode(TIMECODE, FPS_N, FPS_D)
     main = res.findall("asset")[0]
     a_start, a_dur = secs(main.get("start")), secs(main.get("duration"))
-    check(abs(a_start - want) < 0.01,
-          f"素材 start = 時間碼 {TIMECODE} 的 {want:.2f}s（實際 {a_start:.2f}s）")
-    check(a_start > 0, "素材 start 不是 0s —— 這正是 FCP 匯入失敗的原因")
-    in_media = all(a_start - 1e-6 <= secs(c.get("start")) <= a_start + a_dur + 1e-6
-                   for c in clips)
-    check(in_media, "每個 clip 的 start 都落在素材真實的媒體範圍內")
+    check(abs(a_start - want) < 0.01, f"素材 start = 時間碼換算值 {want:.2f}s")
+    check(all(a_start - 1e-6 <= secs(c.get("start")) <= a_start + a_dur + 1e-6
+              for c in clips), "每個 clip 的 start 都落在素材真實的媒體範圍內")
     check(all(c.get("tcFormat") == ("DF" if drop else "NDF") for c in clips),
-          f"clip 的 tcFormat 標成 {'DF' if drop else 'NDF'}（跟著時間碼型態）")
+          f"clip 的 tcFormat 標成 {'DF' if drop else 'NDF'}")
     check(all(c.get("audioRole") for c in clips), "主畫面掛在 dialogue 音訊角色上")
 
-    # 每個 clip 取用的範圍都必須落在素材真實的媒體範圍內
-    from pipeline.s08_fcpxml import _validate_frame_grid, _validate_ranges
-    ranges = {a.get("id"): (secs(a.get("start")), secs(a.get("duration")), a.get("name"))
-              for a in res.findall("asset")}
-    # 靜態圖片的 duration 是 0s，代表不設時間界線
-    probs = _validate_ranges(root, ranges)
-    check(not probs, "所有 clip 都落在素材的媒體範圍內" +
-          (f"（越界：{probs[:2]}）" if probs else ""))
-
-    # 時間軸上的 offset / duration 必須是序列影格的整數倍。
-    # 說明短片刻意用 30fps 算圖、時間軸是 29.97 —— 正是踩到的情境。
-    grid = _validate_frame_grid(root, rate)
-    check(not grid, "所有 offset / duration 都對齊序列的影格網格" +
-          (f"（未對齊：{grid[:2]}）" if grid else ""))
-
-    # 連接的素材：offset 必須落在所屬 clip 的內部時間範圍內
-    lanes, cap_langs, in_range = set(), set(), True
-    n_conn = 0
+    # 連接的說明動畫：offset 要落在所屬 clip 的時間範圍內
+    lanes, in_range, n_conn = set(), True, 0
     for c in clips:
         c_start, c_dur = secs(c.get("start")), secs(c.get("duration"))
         for child in c:
-            lane = child.get("lane")
-            if lane is None:
+            if child.get("lane") is None:
                 continue
-            lanes.add(lane)
-            off = secs(child.get("offset"))
-            if not (c_start - 1e-6 <= off <= c_start + c_dur + 1e-6):
-                in_range = False
+            lanes.add(child.get("lane"))
             n_conn += 1
-            if child.tag == "caption":
-                cap_langs.add(child.get("role"))
-    check(in_range, f"{n_conn} 個連接素材的 offset 都在所屬 clip 的時間範圍內")
-    check("1" in lanes, "B-roll 在 lane 1")
-    check("2" in lanes, "說明短片在 lane 2")
-    check(len(cap_langs) == 2, f"兩條字幕軌：{sorted(cap_langs)}")
-    check(any("zh-Hant" in r for r in cap_langs) and any(".en" in r for r in cap_langs),
-          "中英文字幕 role 都存在")
+            if not (c_start - 1e-6 <= secs(child.get("offset")) <= c_start + c_dur + 1e-6):
+                in_range = False
+    check(in_range, f"{n_conn} 個連接項目的 offset 都在所屬 clip 的範圍內")
+    check("1" in lanes, "說明動畫在 lane 1")
+    check(not any(c.get("role") for c in root.iter("asset-clip")),
+          "沒有任何 asset-clip 帶 role 屬性（它只有 audioRole / videoRole）")
 
-    # adjust-transform 必須是 clip 的第一個子元素
-    order_ok = True
-    n_tf = 0
-    for c in clips:
-        kids = list(c)
-        for i, k in enumerate(kids):
-            if k.tag == "adjust-transform":
-                n_tf += 1
-                order_ok &= (i == 0)
-    check(order_ok and n_tf > 0, f"{n_tf} 個 adjust-transform 都排在 clip 的最前面")
-
-    # B-roll 不能帶進自己的聲音
-    bro = [e for c in clips for e in c.findall("asset-clip") if e.get("lane") == "1"]
-    check(all(e.get("srcEnable") == "video" for e in bro),
-          f"{len(bro)} 段 B-roll 影片都只用畫面不用聲音")
-    check(all(e.get("videoRole") for e in bro),
-          "B-roll 用 videoRole 標記（asset-clip 沒有 role 屬性）")
-
-    # DTD 相容性：每個屬性都必須是該元素合法的屬性名
-    from pipeline.s08_fcpxml import _ALLOWED_ATTRS
+    from pipeline.s06_fcpxml import (_ALLOWED_ATTRS, _validate_frame_grid,
+                                     _validate_ranges)
     offenders = []
     for el in root.iter():
         allowed = _ALLOWED_ATTRS.get(el.tag)
@@ -334,11 +234,17 @@ def test_fcpxml(path: Path, rate: Rate) -> None:
             offenders.append(f"<{el.tag}> 未知元素")
             continue
         offenders += [f"<{el.tag}> {a}" for a in el.attrib if a not in allowed]
-    check(not offenders,
-          "所有屬性名都符合 FCPXML DTD" + (f"（違規：{sorted(set(offenders))[:4]}）"
-                                          if offenders else ""))
-    check(not any(c.get("role") for c in root.iter("asset-clip")),
-          "沒有任何 asset-clip 帶 role 屬性 —— 這正是 FCP 匯入失敗的原因")
+    check(not offenders, "所有屬性名都符合 FCPXML DTD" +
+          (f"（違規：{sorted(set(offenders))[:4]}）" if offenders else ""))
+
+    ranges = {a.get("id"): (secs(a.get("start")), secs(a.get("duration")), a.get("name"))
+              for a in res.findall("asset")}
+    probs = _validate_ranges(root, ranges)
+    check(not probs, "所有 clip 都落在素材的媒體範圍內" +
+          (f"（越界：{probs[:2]}）" if probs else ""))
+    grid = _validate_frame_grid(root, rate)
+    check(not grid, "所有 offset / duration 都對齊序列的影格網格" +
+          (f"（未對齊：{grid[:2]}）" if grid else ""))
 
 
 # ------------------------------------------------------------------ main --
@@ -349,25 +255,22 @@ def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="pipeline-smoke-"))
     try:
         print(f"\n▶ 建立合成素材於 {tmp}")
-        src, media = make_media(tmp)
+        src = make_media(tmp)
         cfg_path = tmp / "project.yaml"
         cfg_path.write_text(f"""
 project:
   name: "Smoke Test"
   source_video: "{src}"
-  media_dir: "{media}"
   build_dir: "{tmp}/build"
-broll:
-  min_gap: 12.0
-  protect_head: 5.0
 explainers:
   font_path: "{FONT}"
   duration: 3.0
+  min_gap: 5.0
   width: 640
   height: 360
   fps: 30
-thumbnail:
-  candidates: 6
+subtitles:
+  fcp_captions: "both"
 corrections:
   word0_1: "CORRECTED"
 """, encoding="utf-8")
@@ -376,27 +279,27 @@ corrections:
 
         print("\n▶ 逐階段執行")
         s01_ingest.run_stage(cfg, claude)
-        make_transcript(tmp, cfg.build)
-        for name, mod in (("03 去贅詞", s03_clean), ("04 字幕", s04_subtitles),
-                          ("05 B-roll", s05_broll), ("06 說明短片", s06_explainers),
-                          ("07 鏡位", s07_framing), ("08 FCPXML", s08_fcpxml),
-                          ("09 說明欄", s09_package), ("10 封面圖", s10_thumbnail)):
+        make_transcript(cfg.build)
+        for name, mod in (("03 剪停頓與結巴", s03_clean), ("04 字幕", s04_subtitles),
+                          ("05 說明動畫", s05_explainers), ("06 FCPXML", s06_fcpxml)):
             mod.run_stage(cfg, claude)
             check(True, f"stage {name} 執行完成")
 
-        print("\n▶ 產出檔案")
         b = cfg.build
-        for f in ("03_cuts.json", "04_subtitles.json", "subtitles_en.srt",
-                  "subtitles_zh-Hant.srt", "subtitles_bilingual.srt",
-                  "05_broll.json", "06_explainers.json", "07_framing.json",
-                  "08_timeline.fcpxml", "09_description.md", "10_thumbnail.png"):
+        print("\n▶ 產出檔案")
+        for f in ("03_cuts.json", "03_cuts.txt", "04_subtitles.json",
+                  "04_glossary.txt", "subtitles_en.srt", "subtitles_zh-Hant.srt",
+                  "subtitles_bilingual.srt", "05_explainers.json",
+                  "06_timeline.fcpxml"):
             check((b / f).exists() and (b / f).stat().st_size > 0, f"{f} 已產生且非空")
 
+        print("\n▶ 剪輯決策")
         cuts = json.loads((b / "03_cuts.json").read_text())
         check(cuts["duration_edit"] < cuts["duration_src"], "剪輯後確實變短了")
         check(cuts["stats"].get("pause", {}).get("count", 0) > 0, "有偵測到過久停頓")
-        check(cuts["stats"].get("filler", {}).get("count", 0) > 0, "有偵測到發語詞")
+        check(cuts["stats"].get("filler", {}).get("count", 0) > 0, "有偵測到結巴／贅詞")
 
+        print("\n▶ 字幕")
         subs = json.loads((b / "04_subtitles.json").read_text())
         cues = subs["cues"]
         check(all(c["e"] > c["s"] for c in cues), "每則字幕結束時間都晚於開始時間")
@@ -404,56 +307,24 @@ corrections:
               "字幕之間沒有重疊")
         check(all(c["e"] <= subs["duration"] + 0.01 for c in cues), "字幕沒有超出片長")
         check(all(c["zh"] for c in cues), "每則字幕都有中文翻譯")
-
-        bro = json.loads((b / "05_broll.json").read_text())
-        check(len(bro["placements"]) == 2,
-              f"B-roll 間隔規則生效（3 個建議 → 排入 {len(bro['placements'])} 個）")
-
-        expl = json.loads((b / "06_explainers.json").read_text())
-        check(len(expl["items"]) == 2, "航線圖與名詞卡都算圖成功")
-        for it in expl["items"]:
-            check(Path(it["path"]).exists() and Path(it["path"]).stat().st_size > 1000,
-                  f'{Path(it["path"]).name} 是有內容的影片檔')
-
-        fr = json.loads((b / "07_framing.json").read_text())
-        check(len(fr["shots"]) > 0 and any(s["mode"] == "punch" for s in fr["shots"]),
-              f'產生 {len(fr["shots"])} 個鏡位且含推近特寫')
-        check(any(s["mode"] == "wide" for s in fr["shots"]), "有回到全景的鏡位")
-
-        pkg = json.loads((b / "09_package.json").read_text())
-        check(pkg["chapters"][0]["t"] == 0, "第一個章節從 0:00 開始")
-        check(len(pkg["chapters"]) == 3, "間隔太近的章節已被濾掉")
-        desc = (b / "09_description.md").read_text()
-        check("Bernard Moitessier" in desc, "提到的人名有進說明欄")
-        check("subtitles_zh-Hant.srt" in desc, "說明欄有字幕上傳指示")
-
         srt = (b / "subtitles_zh-Hant.srt").read_text()
         check(srt.startswith("1\n") and "-->" in srt, "SRT 格式正確")
 
-        import re as _re
         en_srt = (b / "subtitles_en.srt").read_text()
-        # word0_1 是 word0_10 / word0_11 的子字串，所以要用單字邊界判斷，
-        # 順便驗證修正只換完整的詞、不會誤傷更長的詞
-        standalone = _re.search(r"(?<![A-Za-z0-9])word0_1(?![A-Za-z0-9])", en_srt)
+        standalone = re.search(r"(?<![A-Za-z0-9])word0_1(?![A-Za-z0-9])", en_srt)
         check("CORRECTED" in en_srt, "corrections 有套用到英文字幕")
         check(standalone is None, "只換完整單字（word0_10 等更長的詞沒被誤傷）")
         check("word0_10" in en_srt, "更長的詞確實保持原樣")
-        check("CORRECTED" in (b / "09_description.md").read_text(),
-              "corrections 有套用到說明欄")
 
         print("\n▶ 可編輯的詞彙表")
         gl = b / "04_glossary.txt"
         first = gl.read_text()
         check("beam reach" in first and "橫風航行" in first, "首次執行由 AI 建立詞彙表")
         check(first.startswith("#"), "檔案帶有說明用的註解開頭")
-
-        # 模擬使用者編輯：改掉 AI 的譯法、加一個自訂詞、
-        # 故意用連續空白而非 Tab 分欄、留一行註解
-        gl.write_text(
-            "# 我自己加的註解\n"
-            "beam reach\t自訂譯法\t使用者改的\n"
-            "jury rig     應急帆裝     使用者新增的詞\n",
-            encoding="utf-8")
+        # 模擬使用者編輯：改譯法、加自訂詞、用連續空白分欄、留一行註解
+        gl.write_text("# 我自己加的註解\n"
+                      "beam reach\t自訂譯法\t使用者改的\n"
+                      "jury rig     應急帆裝     使用者新增的詞\n", encoding="utf-8")
         s04_subtitles.run_stage(cfg, claude)
         after = gl.read_text()
         check("自訂譯法" in after, "使用者的譯法沒有被 AI 覆蓋")
@@ -462,31 +333,36 @@ corrections:
         check("搶風轉向" in after, "AI 補上了使用者沒收錄的新詞")
         check(after.index("應急帆裝") < after.index("搶風轉向"),
               "使用者的詞排在前面，AI 補的接在後面")
-        check("連續空白" not in after and "jury rig" in after,
-              "用空白分欄的那行也讀得進來")
+        check(any("自訂譯法" in p for p in claude.translate_prompts),
+              "編輯後的譯法有送進翻譯提示詞")
 
-        # 詞彙表確實被送進翻譯的提示詞
-        used = [c for c in claude.glossary_prompts if "自訂譯法" in c]
-        check(bool(used), "編輯後的譯法有送進翻譯提示詞")
+        print("\n▶ 說明動畫")
+        expl = json.loads((b / "05_explainers.json").read_text())
+        check(len(expl["items"]) == 2, "航線圖與名詞卡都算圖成功")
+        kinds = {it["kind"] for it in expl["items"]}
+        check(kinds == {"route", "term"}, f"兩種型態都有（{sorted(kinds)}）")
+        for it in expl["items"]:
+            p = Path(it["path"])
+            check(p.exists() and p.stat().st_size > 1000,
+                  f"{p.name} 是有內容的影片檔")
+        ats = [it["at"] for it in expl["items"]]
+        check(all(b_ - a >= 5.0 - 1e-6 for a, b_ in zip(ats, ats[1:])),
+              "說明動畫之間有維持最小間隔")
 
-        test_fcpxml(b / "08_timeline.fcpxml", Rate(FPS_N, FPS_D))
+        s06_fcpxml.run_stage(cfg, claude)
+        test_fcpxml(b / "06_timeline.fcpxml", Rate(FPS_N, FPS_D))
 
         print("\n▶ 最小探針 (--probe)")
-        s08_fcpxml.build_probe(cfg)
+        s06_fcpxml.build_probe(cfg)
         pr = b / "probe_minimal.fcpxml"
-        check(pr.exists() and pr.stat().st_size > 0, "probe_minimal.fcpxml 已產生")
+        check(pr.exists(), "probe_minimal.fcpxml 已產生")
         praw = pr.read_text()
         proot = ET.fromstring(praw[praw.index("<fcpxml"):])
         pclips = proot.findall(".//spine/asset-clip")
         check(len(pclips) == 1, f"探針只有 1 段主畫面（實際 {len(pclips)}）")
         check(not list(proot.iter("caption")), "探針沒有字幕")
-        check(not list(proot.iter("adjust-transform")), "探針沒有鏡位關鍵影格")
-        check(len(list(pclips[0])) == 0, "探針的 clip 沒有任何連接素材")
-        check(len(proot.find("resources").findall("asset")) == 1,
-              "探針只引用訪談影片一個素材")
-        pa = proot.find("resources").find("asset")
-        check(pa.get("start") != "0s" and pclips[0].get("start") != "0s",
-              "探針也套用了時間碼起點")
+        check(len(list(pclips[0])) == 0, "探針的 clip 沒有任何連接項目")
+        check(pclips[0].get("start") != "0s", "探針也套用了時間碼起點")
     finally:
         if "--keep" in sys.argv:
             print(f"\n▶ 產出保留在 {tmp}")

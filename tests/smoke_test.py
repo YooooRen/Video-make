@@ -352,6 +352,34 @@ corrections:
         s06_fcpxml.run_stage(cfg, claude)
         test_fcpxml(b / "06_timeline.fcpxml", Rate(FPS_N, FPS_D))
 
+        print("\n▶ 說明動畫的內容指紋")
+        from pipeline.s05_explainers import _content_hash, _style_fingerprint
+        style = _style_fingerprint(cfg)
+        item = {"kind": "term", "term_en": "beam reach", "term_zh": "橫風航行",
+                "explain_zh": "風從側面來", "duration": 6.0, "at": 10.0}
+        h1 = _content_hash(item, style)
+        check(_content_hash({**item, "at": 99.0}, style) == h1,
+              "只改插入時間不會重新算圖（at 不影響畫面）")
+        check(_content_hash({**item, "term_zh": "別的名詞"}, style) != h1,
+              "改了內容就換一組指紋（不會誤用舊的算圖）")
+        check(_content_hash(item, style + "x") != h1,
+              "改了樣式設定也會重新算圖")
+        movs = sorted(p.name for p in (cfg.build / "explainers").glob("*.mov"))
+        check(all(len(m.split("_")) >= 3 for m in movs),
+              f"算圖檔名都帶內容指紋：{movs}")
+
+        print("\n▶ 最小探針 (--probe)")
+        s06_fcpxml.build_probe(cfg)
+        pr = b / "probe_minimal.fcpxml"
+        check(pr.exists(), "probe_minimal.fcpxml 已產生")
+        praw = pr.read_text()
+        proot = ET.fromstring(praw[praw.index("<fcpxml"):])
+        pclips = proot.findall(".//spine/asset-clip")
+        check(len(pclips) == 1, f"探針只有 1 段主畫面（實際 {len(pclips)}）")
+        check(not list(proot.iter("caption")), "探針沒有字幕")
+        check(len(list(pclips[0])) == 0, "探針的 clip 沒有任何連接項目")
+        check(pclips[0].get("start") != "0s", "探針也套用了時間碼起點")
+
         print("\n▶ 換來源影片時的快取失效")
         # 重現實際踩到的情境：新來源的修改時間「比既有音軌還舊」。
         # 若用 mtime 比大小判斷，就會誤以為音軌還新、繼續沿用上一支片的音訊。
@@ -381,33 +409,6 @@ corrections:
         check(abs(after - 8.0) < 1.0,
               f"換片後音軌重新抽取自新影片（{after:.1f}s），沒有沿用舊的")
 
-        print("\n▶ 說明動畫的內容指紋")
-        from pipeline.s05_explainers import _content_hash, _style_fingerprint
-        style = _style_fingerprint(cfg)
-        item = {"kind": "term", "term_en": "beam reach", "term_zh": "橫風航行",
-                "explain_zh": "風從側面來", "duration": 6.0, "at": 10.0}
-        h1 = _content_hash(item, style)
-        check(_content_hash({**item, "at": 99.0}, style) == h1,
-              "只改插入時間不會重新算圖（at 不影響畫面）")
-        check(_content_hash({**item, "term_zh": "別的名詞"}, style) != h1,
-              "改了內容就換一組指紋（不會誤用舊的算圖）")
-        check(_content_hash(item, style + "x") != h1,
-              "改了樣式設定也會重新算圖")
-        movs = sorted(p.name for p in (cfg.build / "explainers").glob("*.mov"))
-        check(all(len(m.split("_")) >= 3 for m in movs),
-              f"算圖檔名都帶內容指紋：{movs}")
-
-        print("\n▶ 最小探針 (--probe)")
-        s06_fcpxml.build_probe(cfg)
-        pr = b / "probe_minimal.fcpxml"
-        check(pr.exists(), "probe_minimal.fcpxml 已產生")
-        praw = pr.read_text()
-        proot = ET.fromstring(praw[praw.index("<fcpxml"):])
-        pclips = proot.findall(".//spine/asset-clip")
-        check(len(pclips) == 1, f"探針只有 1 段主畫面（實際 {len(pclips)}）")
-        check(not list(proot.iter("caption")), "探針沒有字幕")
-        check(len(list(pclips[0])) == 0, "探針的 clip 沒有任何連接項目")
-        check(pclips[0].get("start") != "0s", "探針也套用了時間碼起點")
     finally:
         if "--keep" in sys.argv:
             print(f"\n▶ 產出保留在 {tmp}")

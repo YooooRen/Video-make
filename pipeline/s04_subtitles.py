@@ -6,10 +6,30 @@ from pathlib import Path
 
 from .claude_client import load_prompt
 from .timeline import EditMap, Rate, write_srt, write_vtt
-from .util import (apply_corrections, chunked, log, read_json, warn,
-                   write_json, write_text)
+from .util import (apply_corrections, chunked, fmt_hhmmss, log, read_json,
+                   warn, write_json, write_text)
 
 _SENT_END = re.compile(r"[.!?…]$")
+
+# 純粹的應答語／發語詞。整張字卡只有這些字時不給字幕 ——
+# 觀眾看到「嗯嗯」沒有任何幫助，只會佔住畫面。
+# 刻意不收 yeah / yes / right / okay：那些常常是有意義的回答。
+_INTERJECTIONS = {
+    "um", "umm", "ummm", "uh", "uhh", "uhhh", "erm", "er", "err",
+    "ah", "ahh", "mm", "mmm", "hmm", "hm", "hmmm",
+    "mhm", "mhmm", "mmhmm", "uhhuh", "huh",
+}
+_WORD_RE = re.compile(r"[A-Za-z']+(?:-[A-Za-z']+)*")
+# 中文側的應答語，用來擋住翻譯把它們譯成「嗯嗯」的情況
+_ZH_INTERJECTIONS = re.compile(r"^[嗯呃啊喔哦唔欸誒嘿哈，。、！？…\s]+$")
+
+
+def _is_interjection_only(text: str) -> bool:
+    """整段文字是不是只有應答語（含只剩標點的情況）。"""
+    toks = _WORD_RE.findall((text or "").lower())
+    if not toks:
+        return True
+    return all(t.replace("-", "").replace("'", "") in _INTERJECTIONS for t in toks)
 _NO_SPACE_BEFORE = set(".,!?;:%)]}'’")
 
 
@@ -25,6 +45,15 @@ def run_stage(cfg, claude=None) -> dict:
 
     cues = _build_cues(cfg, words, tr.get("speakers", {}))
     log("04", f"切成 {len(cues)} 則英文字幕")
+
+    if cfg.get("subtitles.drop_interjections", True):
+        kept = [c for c in cues if not _is_interjection_only(c["en"])]
+        if len(kept) < len(cues):
+            log("04", f"移除 {len(cues) - len(kept)} 則只有應答語的字幕"
+                      f"（Mm-hmm、uh-huh 這類）")
+            for i, c in enumerate(kept):
+                c["id"] = i          # 重新編號，翻譯才對得上
+            cues = kept
 
     glossary: list[dict] = []
     if claude is not None:
@@ -257,27 +286,60 @@ def _glossary(cfg, claude, tr) -> list[dict]:
 
 
 def _translate(cfg, claude, cues, glossary) -> None:
-    tmpl = load_prompt("translate_zhtw.md")
     corrections = cfg.get("corrections", {}) or {}
     gl = "\n".join(f'- {d["en"]} → {d["zh"]}' for d in glossary) or "（無）"
     if corrections:
         gl += "\n\n【人名與專有名詞的正確寫法，請務必照這個拼】\n"
         gl += "\n".join(f"- {k} → {v}" for k, v in corrections.items())
-    max_chars = int(cfg.get("subtitles.max_chars_zh", 18))
     batch = int(cfg.get("subtitles.translate_batch", 25))
-    idx = {c["id"]: c for c in cues}
-    total = (len(cues) + batch - 1) // batch
 
-    for bi, group in enumerate(chunked(cues, batch)):
-        lo, hi = group[0]["id"], group[-1]["id"]
-        before = cues[max(0, lo - 3):lo]
-        after = cues[hi + 1:hi + 4]
+    _translate_batches(cfg, claude, cues, cues, gl, corrections, batch, "翻譯")
+
+    # 補漏：整批失敗時（多半是 Claude 用量到上限或回覆被截斷）用更小的批次重試。
+    # 已成功的批次會命中快取，不會重複消耗額度。
+    for attempt, size in ((1, max(6, batch // 3)), (2, 4)):
+        missing = [c for c in cues if not c.get("zh")]
+        if not missing:
+            break
+        warn("04", f"有 {len(missing)} 則沒翻到，改用 {size} 則一批重試（第 {attempt} 次）")
+        _translate_batches(cfg, claude, cues, missing, gl, corrections, size,
+                           f"補譯{attempt}")
+
+    missing = [c for c in cues if not c.get("zh")]
+    if missing:
+        warn("04", "─" * 52)
+        warn("04", f"仍有 {len(missing)}/{len(cues)} 則字幕沒有中文，"
+                   f"缺口從 {fmt_hhmmss(missing[0]['s'])} 到 "
+                   f"{fmt_hhmmss(missing[-1]['e'])}")
+        warn("04", "中文 SRT 會在缺口處直接沒有字幕，英文則完整。")
+        warn("04", "最常見的原因是 Claude 用量到上限。等額度恢復後重跑：")
+        warn("04", "    python run.py --only 04")
+        warn("04", "已翻好的部分會命中快取，只會重問缺的那些。")
+        warn("04", "─" * 52)
+    else:
+        log("04", f"{len(cues)} 則字幕全部翻譯完成")
+
+
+def _translate_batches(cfg, claude, all_cues, targets, gl, corrections,
+                       batch: int, label: str) -> None:
+    """把 targets 分批送去翻譯；前後文一律從 all_cues 取，保持語境完整。"""
+    tmpl = load_prompt("translate_zhtw.md")
+    max_chars = int(cfg.get("subtitles.max_chars_zh", 18))
+    max_lines = int(cfg.get("subtitles.max_lines", 2))
+    pos = {c["id"]: i for i, c in enumerate(all_cues)}
+    idx = {c["id"]: c for c in all_cues}
+    total = (len(targets) + batch - 1) // batch
+
+    for bi, group in enumerate(chunked(targets, batch)):
+        lo, hi = pos[group[0]["id"]], pos[group[-1]["id"]]
+        before, after = all_cues[max(0, lo - 3):lo], all_cues[hi + 1:hi + 4]
         body = []
         if before:
             body.append("（前文，僅供參考，不要翻譯）")
             body += [f'  {c["speaker"]}: {c["en"]}' for c in before]
         body.append("（以下才是要翻譯的）")
-        body += [f'{c["id"]} | {c["speaker"]} | {c["en"]}'.replace("\n", " ") for c in group]
+        body += [f'{c["id"]} | {c["speaker"]} | {c["en"]}'.replace("\n", " ")
+                 for c in group]
         if after:
             body.append("（後文，僅供參考，不要翻譯）")
             body += [f'  {c["speaker"]}: {c["en"]}' for c in after]
@@ -285,11 +347,11 @@ def _translate(cfg, claude, cues, glossary) -> None:
         prompt = (tmpl.replace("{{MAX_CHARS}}", str(max_chars))
                       .replace("{{GLOSSARY}}", gl)
                       .replace("{{CUES}}", "\n".join(body)))
-        log("04", f"翻譯 {bi+1}/{total}（字幕 {lo}–{hi}）")
+        log("04", f"{label} {bi+1}/{total}（字幕 {group[0]['id']}–{group[-1]['id']}）")
         try:
             data = claude.ask_json(prompt, label="04")
         except Exception as exc:  # noqa: BLE001
-            warn("04", f"第 {bi+1} 批翻譯失敗（{exc}），這批留空")
+            warn("04", f"{label} 第 {bi+1} 批失敗（{exc}）")
             continue
         got = 0
         for it in (data if isinstance(data, list) else []):
@@ -298,15 +360,15 @@ def _translate(cfg, claude, cues, glossary) -> None:
             cue = idx.get(it.get("id"))
             zh = str(it.get("zh", "")).strip()
             if cue is not None and zh:
-                cue["zh"] = _wrap_zh(apply_corrections(zh, corrections), max_chars,
-                                     int(cfg.get("subtitles.max_lines", 2)))
+                if (cfg.get("subtitles.drop_interjections", True)
+                        and _ZH_INTERJECTIONS.match(zh)):
+                    zh = ""          # 譯成「嗯嗯」之類的就不要這則中文
+                if zh:
+                    cue["zh"] = _wrap_zh(apply_corrections(zh, corrections),
+                                         max_chars, max_lines)
                 got += 1
         if got < len(group):
-            warn("04", f"第 {bi+1} 批有 {len(group)-got} 則沒翻到")
-
-    missing = [c["id"] for c in cues if not c.get("zh")]
-    if missing:
-        warn("04", f"{len(missing)} 則字幕沒有中文，可單獨重跑 stage 04")
+            warn("04", f"{label} 第 {bi+1} 批有 {len(group)-got} 則沒翻到")
 
 
 def _wrap_zh(text: str, max_chars: int, max_lines: int) -> str:

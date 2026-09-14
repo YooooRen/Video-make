@@ -133,7 +133,45 @@ def _select(args) -> list:
     return [s for s in STAGES if lo <= s[0] <= hi]
 
 
+def _count_srt(path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for block in path.read_text(encoding="utf-8").split("\n\n")
+               if "-->" in block)
+
+
+def _warn_incomplete(cfg) -> None:
+    """檢查產出是否完整 —— 中途失敗的階段不該讓整趟看起來像成功。"""
+    b = cfg.build
+    problems: list[str] = []
+
+    zh, en = _count_srt(b / "subtitles_zh-Hant.srt"), _count_srt(b / "subtitles_en.srt")
+    if en and zh < en * 0.95:
+        problems.append(
+            f"中文字幕只有 {zh} 則，英文有 {en} 則 —— 有 {en - zh} 則沒翻到。"
+            "\n       重跑 python run.py --only 04（已翻好的會命中快取）")
+
+    if cfg.get("explainers.enabled", True):
+        try:
+            import json
+            n = len(json.loads((b / "05_explainers.json").read_text()).get("items", []))
+        except Exception:  # noqa: BLE001
+            n = 0
+        if n == 0:
+            problems.append(
+                "沒有任何說明動畫。若上面出現過擷取或算圖失敗的訊息，"
+                "\n       重跑 python run.py --only 05 06")
+
+    if problems:
+        print("\n" + "─" * 58)
+        print("  ⚠️  產出不完整：")
+        for p_ in problems:
+            print(f"    • {p_}")
+        print("─" * 58)
+
+
 def _final_report(cfg) -> None:
+    _warn_incomplete(cfg)
     b = cfg.build
     print("\n" + "═" * 58)
     print("  完成。接下來在 Mac 上這樣做：")

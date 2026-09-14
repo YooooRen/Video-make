@@ -71,6 +71,9 @@ DEFAULTS: dict[str, Any] = {
         # 詞彙表檔案。留空 = build/04_glossary.txt。
         # 這個檔案可以編輯，你寫的譯法優先，AI 只會補上沒收錄的新詞。
         "glossary_file": "",
+        # 整句只有應答語的字幕（Mm-hmm、uh-huh、um…）直接不給字幕。
+        # 這只影響字幕，不會剪掉影片 —— 那些聲音多半與對方說話重疊。
+        "drop_interjections": True,
         "burn_in": False,            # True = 另外輸出燒錄字幕影片（YouTube CC 不需要）
         # FCPXML 裡要放哪幾條字幕軌：both（中英各一）/ zh / en / none。
         # 這只影響 FCP 裡的預覽；YouTube 的隱藏式字幕一律用輸出的 .srt 檔。

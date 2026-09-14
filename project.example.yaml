@@ -53,6 +53,8 @@ cleanup:
 subtitles:
   fcp_captions: "zh"       # FCP 裡放幾條字幕軌：zh / en / both / none
                            # both 會讓中英同時疊在畫面上；YouTube CC 一律用 .srt
+  drop_interjections: true # 整句只有應答語（Mm-hmm、uh-huh、um）的字幕直接不顯示
+                           # 只影響字幕，不會剪掉影片
   glossary_file: ""        # 留空 = build/04_glossary.txt
                            # 這個檔案可以編輯，你寫的譯法優先，AI 只補沒收錄的新詞
   max_chars_en: 42         # 每行英文字元上限；× max_lines = 每張字卡的容量

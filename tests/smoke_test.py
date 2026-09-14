@@ -61,6 +61,7 @@ class FakeClaude:
 
     def __init__(self) -> None:
         self.translate_prompts: list[str] = []
+        self.fail_large_batches = False
 
     def summary(self) -> str:
         return f"FakeClaude 呼叫 {self.calls} 次"
@@ -84,6 +85,9 @@ class FakeClaude:
             ids = [int(h) for h in
                    (ln.split("|")[0].strip() for ln in prompt.splitlines())
                    if h.isdigit()]
+            # 模擬 Claude 用量到上限：大批次先失敗，小批次的補譯才成功
+            if self.fail_large_batches and len(ids) > 10:
+                raise RuntimeError("usage limit reached")
             return [{"id": i, "zh": f"這是第{i}句中文字幕"} for i in ids]
         if "說明小卡／航線圖" in prompt:
             return [
@@ -120,7 +124,7 @@ def make_transcript(build: Path) -> dict:
     """造一份有兩個說話者、含長停頓與結巴的逐字稿。"""
     words, segments = [], []
     t = 0.5
-    for si in range(12):
+    for si in range(9):
         spk = "SPEAKER_00" if si % 2 == 0 else "SPEAKER_01"
         w0 = len(words)
         for wi in range(20):
@@ -133,6 +137,17 @@ def make_transcript(build: Path) -> dict:
         segments.append({"id": si, "s": words[w0]["s"], "e": words[-1]["e"],
                          "w0": w0, "w1": len(words) - 1, "spk": spk,
                          "text": " ".join(w["w"] for w in words[w0:])})
+    # 一段只有應答語的發言：應該完全不產生字幕
+    t += 2.0
+    w0 = len(words)
+    for token in ("Mm-hmm.", "Uh-huh.", "Mm-hmm."):
+        words.append({"i": len(words), "w": token, "s": round(t, 3),
+                      "e": round(t + 0.3, 3), "p": 0.9, "spk": "SPEAKER_01"})
+        t += 0.35
+    segments.append({"id": len(segments), "s": words[w0]["s"], "e": words[-1]["e"],
+                     "w0": w0, "w1": len(words) - 1, "spk": "SPEAKER_01",
+                     "text": "Mm-hmm. Uh-huh. Mm-hmm."})
+
     data = {"language": "en", "duration": DUR,
             "speakers": {"SPEAKER_00": {"id": "SPEAKER_00", "name": "Captain", "role": "guest"},
                          "SPEAKER_01": {"id": "SPEAKER_01", "name": "Host", "role": "host"}},
@@ -160,6 +175,13 @@ def test_timeline_math() -> None:
     check(emap.src_to_edit(11) is None, "被剪掉的時間回傳 None")
     check(abs(emap.src_to_edit(20) - 18.0) < 0.05, "剪輯點之後的時間正確位移")
     check(abs(emap.edit_to_src(emap.src_to_edit(20)) - 20) < 0.05, "來回換算可逆")
+
+    # 逐字稿的時間戳有時會超出宣告的片長，超出的刪除區間必須被夾回去
+    keeps2, _ = build_keeps(50.0, [(10, 12), (55, 60)],
+                            rate=rate, min_removal=0.1, min_keep=0.3, pad=0.0)
+    total2 = sum(e - s for s, e in keeps2)
+    check(total2 <= 50.0 + 1e-6 and abs(total2 - 48.0) < 0.05,
+          f"超出片長的刪除被夾回去，剪後 {total2:.2f}s 不會反而變長")
 
     want, drop = parse_timecode(TIMECODE, FPS_N, FPS_D)
     check(drop and abs(want - 78207.5294) < 1e-3,
@@ -315,6 +337,26 @@ corrections:
         check("CORRECTED" in en_srt, "corrections 有套用到英文字幕")
         check(standalone is None, "只換完整單字（word0_10 等更長的詞沒被誤傷）")
         check("word0_10" in en_srt, "更長的詞確實保持原樣")
+
+        check(not any("Mm-hmm" in c["en"] or "Uh-huh" in c["en"] for c in cues),
+              "只有應答語的字幕整則被移除")
+        check("Mm-hmm" not in en_srt and "Uh-huh" not in en_srt,
+              "應答語沒有出現在英文 SRT 裡")
+        check([c["id"] for c in cues] == list(range(len(cues))),
+              "移除後字幕重新編號，翻譯才對得上")
+
+        print("\n▶ 用量上限後的補譯")
+        claude2 = FakeClaude()
+        claude2.fail_large_batches = True
+        s04_subtitles.run_stage(cfg, claude2)
+        subs2 = json.loads((b / "04_subtitles.json").read_text())
+        check(all(c["zh"] for c in subs2["cues"]),
+              "大批次失敗後，小批次補譯把所有字幕補齊")
+        zh_n = sum(1 for blk in (b / "subtitles_zh-Hant.srt").read_text().split("\n\n")
+                   if "-->" in blk)
+        en_n = sum(1 for blk in (b / "subtitles_en.srt").read_text().split("\n\n")
+                   if "-->" in blk)
+        check(zh_n == en_n, f"中英字幕數量一致（中 {zh_n} / 英 {en_n}）")
 
         print("\n▶ 可編輯的詞彙表")
         gl = b / "04_glossary.txt"

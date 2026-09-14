@@ -157,12 +157,15 @@ def build_keeps(duration: float, removals: Iterable[tuple[float, float]], *,
     回傳 (keeps, effective_removals)。effective_removals 是實際生效的刪除
     （已套用 pad 縮回、已濾掉太短的），方便報表跟除錯。
     """
-    # 1. 內縮 pad，避免切到相鄰字的字頭/字尾
+    # 1. 內縮 pad，避免切到相鄰字的字頭/字尾；同時夾在 [0, duration] 內。
+    #    逐字稿的時間戳偶爾會超出宣告的片長，不夾的話補集會算出超過片長的
+    #    保留片段，「剪完」反而比原片還長。
     padded: list[tuple[float, float]] = []
     for s, e in removals:
-        s2, e2 = s + pad, e - pad
+        s2 = max(0.0, min(duration, s + pad))
+        e2 = max(0.0, min(duration, e - pad))
         if e2 - s2 >= min_removal:
-            padded.append((max(0.0, s2), min(duration, e2)))
+            padded.append((s2, e2))
     if not padded:
         return [(0.0, rate.snap(duration))], []
 

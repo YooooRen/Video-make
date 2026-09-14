@@ -5,7 +5,7 @@ pyyaml>=6.0
 faster-whisper>=1.0.3
 
 # 說話者分離（可選；逐字稿要標出誰在講話才需要）
-pyannote.audio>=3.1.1
+pyannote.audio>=3.3.2   # 3.3 起改用 token= ；更早的版本與 huggingface_hub>=0.26 不相容
 
 # 說明動畫繪製
 matplotlib>=3.8

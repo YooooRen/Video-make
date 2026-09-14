@@ -281,6 +281,21 @@ python run.py --probe
 匯入成功代表媒體沒問題、是時間軸上加的東西有問題；匯入失敗則是媒體檔本身
 （路徑、編碼、VFR）的問題。
 
+**說話者分離失敗：`hf_hub_download() got an unexpected keyword argument 'use_auth_token'`**
+
+套件版本打架。`huggingface_hub` 0.26 之後移除了 `use_auth_token` 參數（改名為
+`token`），而 3.3 以前的 `pyannote.audio` 內部還在傳舊名字。
+
+```bash
+pip install -U "pyannote.audio>=3.3.2"
+python run.py --only 02
+```
+
+升級後仍不行就走另一條：`pip install "huggingface_hub<0.26"`。
+
+程式本身會依安裝的版本自動挑正確的參數名，都不合時則不傳 token、
+讓 huggingface_hub 自己讀 `HF_TOKEN` 環境變數。
+
 **說明動畫的中文變成豆腐字 □□□**
 
 ```yaml

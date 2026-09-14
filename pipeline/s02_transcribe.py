@@ -1,6 +1,7 @@
 """Stage 02：faster-whisper 逐字轉錄（詞級時間戳）+ pyannote 說話者分離。"""
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 
@@ -126,8 +127,7 @@ def _diarize(cfg, audio: str, duration: float):
 
     log("02", "執行說話者分離（pyannote）…這一步比較慢")
     try:
-        pipe = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1", use_auth_token=token)
+        pipe = _load_pipeline(Pipeline, token)
         kwargs = {}
         n = int(cfg.get("transcribe.num_speakers", 0) or 0)
         if n > 0:
@@ -135,12 +135,47 @@ def _diarize(cfg, audio: str, duration: float):
         ann = pipe(audio, **kwargs)
     except Exception as exc:  # noqa: BLE001
         warn("02", f"說話者分離失敗（{exc}），繼續但不分鏡")
+        if "use_auth_token" in str(exc):
+            warn("02", "這是套件版本打架：huggingface_hub 0.26 之後移除了 "
+                       "use_auth_token 參數，舊版 pyannote.audio 內部還在傳它。")
+            warn("02", '修法：pip install -U "pyannote.audio>=3.3.2"')
+            warn("02", '升級後仍不行的話改走另一條：pip install "huggingface_hub<0.26"')
         return None
 
     turns = [{"s": float(t.start), "e": float(t.end), "spk": str(label)}
              for t, _, label in ann.itertracks(yield_label=True)]
     turns.sort(key=lambda x: x["s"])
     return turns
+
+
+def _load_pipeline(Pipeline, token: str):
+    """
+    載入 pyannote 的說話者分離 pipeline，同時相容新舊版的參數名稱。
+
+    pyannote.audio 3.3 之前用 use_auth_token，之後改成 token；
+    而 huggingface_hub 0.26 之後也移除了 use_auth_token。兩者版本不搭時會出現
+    "hf_hub_download() got an unexpected keyword argument 'use_auth_token'"。
+
+    這裡依安裝的版本挑正確的參數名；都不合就完全不傳，
+    讓 huggingface_hub 自己去讀 HF_TOKEN 環境變數。
+    """
+    model = "pyannote/speaker-diarization-3.1"
+    params = inspect.signature(Pipeline.from_pretrained).parameters
+    attempts: list[dict] = []
+    if "token" in params:
+        attempts.append({"token": token})
+    if "use_auth_token" in params:
+        attempts.append({"use_auth_token": token})
+    attempts.append({})          # huggingface_hub 會自己讀 HF_TOKEN
+
+    last: Exception | None = None
+    for kwargs in attempts:
+        try:
+            return Pipeline.from_pretrained(model, **kwargs)
+        except TypeError as exc:
+            last = exc           # 參數名稱不合，換下一種
+            continue
+    raise last if last else RuntimeError("無法載入 pyannote pipeline")
 
 
 def _assign_speakers(words, segments, turns):
